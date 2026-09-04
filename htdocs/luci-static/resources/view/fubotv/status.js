@@ -195,7 +195,7 @@ return view.extend({
 		var self = this;
 
 		var m = new form.Map('fubotv', _('FuBoTv 监控上报'),
-			_('将路由器的 CPU、内存与 LAN 接口占用率，以 HTTP GET 推送到 ESP8266 天气时钟显示。'));
+			_('将路由器的 CPU、内存与 LAN 接口占用率，以 HTTP POST 表单推送到 ESP8266 天气时钟显示。'));
 
 		var s = m.section(form.TypedSection, 'main', _('上报设置'),
 			_('修改后点击「保存并应用」，procd 会自动重载上报服务。'));
@@ -241,8 +241,8 @@ return view.extend({
 		o.default = '/PCM';
 		o.rmempty = false;
 
-		o = s.option(form.Value, 'auth', _('认证串'),
-			_('附加在参数串首部。原版上位机使用 admin=root，留空则不附加。'));
+		o = s.option(form.Value, 'auth', _('认证串（表单首字段）'),
+			_('作为表单主体首个字段发送。原版上位机使用 admin=root，留空则不附加。凭据错误时设备会直接断开连接。'));
 		o.default = 'admin=root';
 		o.rmempty = true;
 
@@ -262,15 +262,23 @@ return view.extend({
 		o.rmempty = false;
 
 		o = s.option(form.Button, '_test', _('连通性测试'),
-			_('立即采样一次并向时钟发送单条请求，用于验证地址与协议是否正确。'));
+			_('立即采样一次并向时钟 POST 单条上报，用于验证地址与协议是否正确。成功判定：HTTP 200 且响应含回执令牌 0637。'));
 		o.inputstyle = 'apply';
 		o.onclick = function() {
 			return callTest().then(function(r) {
-				var detail = E('code', { 'style': 'word-break:break-all' }, (r && r.url) || '');
+				var detail = E('div', {}, [
+					E('code', { 'style': 'word-break:break-all; display:block' },
+						'POST ' + ((r && r.url) || '')),
+					E('code', { 'style': 'word-break:break-all; display:block' },
+						_('表单主体') + ': ' + ((r && r.body) || '')),
+					E('code', { 'style': 'word-break:break-all; display:block' },
+						_('响应') + ': HTTP ' + ((r && r.code) || 0) +
+						(((r && r.resp) ? (' · ' + r.resp) : '')))
+				]);
 
 				if (r && r.ok)
 					ui.addNotification(null, E('p', {}, [
-						_('上报成功，时钟返回 HTTP ') + r.code, E('br'), detail
+						_('上报成功，时钟返回回执令牌'), E('br'), detail
 					]), 'success');
 				else
 					ui.addNotification(null, E('p', {}, [
@@ -287,7 +295,9 @@ return view.extend({
 
 		var hint = E('p', { 'class': 'ftv-hint' }, [
 			_('协议格式：'),
-			E('code', {}, 'GET http://<时钟地址>/PCM?admin=root&T1=<CPU>&T2=<RAM>&T3=<VOL>'),
+			E('code', {}, 'POST http://<时钟地址>/PCM  ·  表单主体: admin=root&T1=<CPU>&T2=<RAM>&T3=<VOL>'),
+			E('br'),
+			_('设备仅接受 POST（GET 返回 404），凭据错误时直接断连；成功响应正文为令牌 0637。'),
 			E('br'),
 			_('CPU 与 VOL 为差值型指标，服务启动后第二拍开始才有有效数据。')
 		]);

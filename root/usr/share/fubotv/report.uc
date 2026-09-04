@@ -4,11 +4,17 @@
  * fubotv-monitor -- 周期上报守护进程
  *
  * 由 procd 托管，按 UCI 配置的间隔采集 CPU / RAM / VOL，
- * 以 HTTP GET 推送到 ESP8266 天气时钟：
+ * 以 HTTP POST（x-www-form-urlencoded）推送到 ESP8266 天气时钟：
  *
- *   GET http://<host>[:port]<path>?<auth>&T1=<cpu>&T2=<ram>&T3=<vol>
+ *   POST http://<host>[:port]<path>
+ *   Content-Type: application/x-www-form-urlencoded
  *
- * 与原版 Windows 上位机协议兼容（/PCM?admin=root&T1=..&T2=..&T3=..）。
+ *   admin=root&T1=<cpu>&T2=<ram>&T3=<vol>
+ *
+ * 实机协议（2026-09-05 实测 192.168.88.244）：设备仅接受 POST，
+ * GET /PCM 返回 404；凭据 admin=root 必须是表单首字段，
+ * 凭据缺失或错误时设备直接断开连接（无 HTTP 响应）；
+ * 成功时返回 200 + 正文令牌 0637。
  * 最新一次结果写入 /var/run/fubotv.status，供 LuCI 界面经 rpcd 读取。
  */
 
@@ -63,7 +69,7 @@ function load_config() {
 
 /* ------------------------------------------------------------------- URL */
 
-function build_url(c, cpu, ram, vol) {
+function build_url(c) {
 	let host = c.host;
 
 	/* IPv6 文本地址需要方括号包裹 */
@@ -80,8 +86,18 @@ function build_url(c, cpu, ram, vol) {
 	if (path != '' && substr(path, 0, 1) != '/')
 		path = '/' + path;
 
-	url += (path != '') ? path : '/PCM';
+	return url + ((path != '') ? path : '/PCM');
+}
 
+/* --------------------------------------------------------------- 表单主体 */
+
+/*
+ * 表单字段顺序与原版 Windows 上位机一致：
+ * 凭据 admin 首位，随后 T1/T2/T3，无前导 &。
+ * 凭据串里的 & 和 = 允许出现（拆首段后原样保留），
+ * 指标值为 0-100 的数字，无需转义。
+ */
+function build_body(c, cpu, ram, vol) {
 	let q = [];
 
 	if (c.auth != '')
@@ -91,7 +107,7 @@ function build_url(c, cpu, ram, vol) {
 	push(q, c.p_ram + '=' + int(ram + 0.5));
 	push(q, c.p_vol + '=' + int(vol + 0.5));
 
-	return url + '?' + join(q, '&');
+	return join(q, '&');
 }
 
 /* ------------------------------------------------------------------- 发送 */
@@ -102,6 +118,12 @@ function build_url(c, cpu, ram, vol) {
  *      定时器回调中同步等待结果；
  *   2) ucode-mod-uclient 自 OpenWrt 24.10 起才提供，会不必要地抬高版本门槛。
  * 每秒 fork 一次 curl 的开销在毫秒级，对本场景可以接受。
+ *
+ * 协议要点（实机验证）：
+ *   - 必须 POST 表单主体（Content-Type: x-www-form-urlencoded），
+ *     设备对 GET /PCM 返回 404；
+ *   - 成功响应正文为令牌 0637，以此作为成功判据（比裸状态码更严）；
+ *   - 凭据错误时设备直接断开连接，curl 退出码 52（空回复）或 56（接收错误）。
  */
 function shquote(s) {
 	return "'" + join(split('' + s, "'"), "'\\''") + "'";
@@ -116,16 +138,22 @@ function curl_error(rc) {
 		return 'HTTP 错误（4xx / 5xx）';
 	if (rc == 28)
 		return '连接超时';
+	if (rc == 52)
+		return '设备无响应（凭据可能被拒）';
+	if (rc == 56)
+		return '连接被设备重置（凭据可能被拒）';
 	if (rc == 127)
 		return 'curl 未安装';
 
 	return 'curl 退出码 ' + rc;
 }
 
-function send(url) {
-	/* -f: HTTP 错误时返回非零; -m: 总超时; -o: 丢弃响应体 */
-	let cmd = 'curl -fsS -o /dev/null -m ' + int(HTTP_TIMEOUT / 1000) + ' ' +
-		shquote(url) + ' 2>/dev/null';
+function send(url, body) {
+	/* -f: HTTP 错误时返回非零; -m: 总超时; --data: POST 主体; -o: 丢弃响应体 */
+	let cmd = 'curl -fsS -o /dev/null -m ' + int(HTTP_TIMEOUT / 1000) +
+		' -H ' + shquote('Content-Type: application/x-www-form-urlencoded') +
+		' --data ' + shquote(body) +
+		' ' + shquote(url) + ' 2>/dev/null';
 
 	let rc = system(cmd, HTTP_TIMEOUT + 2000);
 
@@ -168,7 +196,8 @@ function write_status(cpu, ram, vol, result) {
 		error: stats.error,
 		code: result.code,
 		running: true,
-		url: result.url
+		url: result.url,
+		body: result.body
 	}));
 }
 
@@ -193,14 +222,16 @@ function tick() {
 			warn('fubotv: host not configured, skipping\n');
 		}
 		else {
-			let url = build_url(c, cpu, ram, vol);
-			let result = send(url);
+			let url = build_url(c);
+			let body = build_body(c, cpu, ram, vol);
+			let result = send(url, body);
 
 			result.url = url;
+			result.body = body;
 			write_status(cpu, ram, vol, result);
 
 			if (!result.ok)
-				warn('fubotv: report failed (' + result.error + '): ' + url + '\n');
+				warn('fubotv: report failed (' + result.error + '): POST ' + url + '\n');
 		}
 	}
 

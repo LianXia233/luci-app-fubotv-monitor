@@ -20,10 +20,11 @@ config fubotv 'main'
 	# 上报路径
 	option path '/PCM'
 
-	# 附加在参数串首部的认证串，留空则不附加
+	# 认证串，作为 POST 表单主体的首个字段发送，留空则不附加。
+	# 原版上位机固定为 admin=root；凭据错误时设备会直接断开连接。
 	option auth 'admin=root'
 
-	# 三项指标对应的 URL 参数名
+	# 三项指标对应的表单参数名
 	option param_cpu 'T1'
 	option param_ram 'T2'
 	option param_vol 'T3'

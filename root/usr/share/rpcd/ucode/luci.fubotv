@@ -5,7 +5,7 @@
  *
  * ubus 对象: luci.fubotv
  *   status()  读取守护进程写入的最新指标与上报统计
- *   test()    立即采样一次并向时钟发送一条请求，用于验证连通性
+ *   test()    立即采样一次并向时钟 POST 一条上报，用于验证连通性
  */
 
 import { readfile, unlink } from 'fs';
@@ -45,7 +45,7 @@ function uci_conf() {
 	};
 }
 
-function build_url(c, cpu, ram, vol) {
+function build_url(c) {
 	let host = c.host;
 
 	if (index(host, ':') >= 0 && substr(host, 0, 1) != '[')
@@ -61,8 +61,10 @@ function build_url(c, cpu, ram, vol) {
 	if (path != '' && substr(path, 0, 1) != '/')
 		path = '/' + path;
 
-	url += (path != '') ? path : '/PCM';
+	return url + ((path != '') ? path : '/PCM');
+}
 
+function build_body(c, cpu, ram, vol) {
 	let q = [];
 
 	if (c.auth != '')
@@ -72,7 +74,7 @@ function build_url(c, cpu, ram, vol) {
 	push(q, c.p_ram + '=' + int(ram + 0.5));
 	push(q, c.p_vol + '=' + int(vol + 0.5));
 
-	return url + '?' + join(q, '&');
+	return join(q, '&');
 }
 
 function service_running() {
@@ -132,7 +134,8 @@ return {
 				last: (st != null) ? st.last : 0,
 				last_ok: (st != null) ? st.last_ok : 0,
 				error: (st != null) ? st.error : '',
-				url: (st != null) ? st.url : ''
+				url: (st != null) ? st.url : '',
+				body: (st != null) ? st.body : ''
 			};
 		}
 	},
@@ -143,7 +146,7 @@ return {
 			let c = uci_conf();
 
 			if (c.host == '')
-				return { ok: false, code: 0, url: '', error: '尚未配置时钟 IP 地址' };
+				return { ok: false, code: 0, url: '', body: '', error: '尚未配置时钟 IP 地址' };
 
 			/* CPU 与 VOL 是差值型指标，此处做一次 1 秒窗口采样 */
 			cpu_usage();
@@ -153,27 +156,57 @@ return {
 			let cpu = cpu_usage();
 			let ram = mem_usage();
 			let vol = vol_usage(c.iface, c.linkspeed);
-			let url = build_url(c, cpu, ram, vol);
+			let url = build_url(c);
+			let body = build_body(c, cpu, ram, vol);
 			let tmp = '/tmp/.fubotv_test_' + time();
 
-			/* 不经 -f，以便拿到真实 HTTP 状态码而非笼统的失败 */
-			system('curl -s -o /dev/null -w "%{http_code}" -m ' +
-				int(HTTP_TIMEOUT / 1000) + ' ' + shquote(url) +
-				' > ' + tmp + ' 2>/dev/null', 8000);
+			/*
+			 * 协议（实机验证）：
+			 *   POST 表单主体，成功正文为令牌 0637；
+			 *   凭据被拒时设备直接断连（curl 退出码 52/56，HTTP 码为 0）。
+			 * 不经 -f，以拿到真实 HTTP 状态码与响应正文。
+			 */
+			system('curl -s -o ' + tmp + ' -w "%{http_code}" -m ' +
+				int(HTTP_TIMEOUT / 1000) +
+				' -H ' + shquote('Content-Type: application/x-www-form-urlencoded') +
+				' --data ' + shquote(body) +
+				' ' + shquote(url) + ' > ' + tmp + '.code 2>/dev/null', 8000);
 
-			let code = int(trim(readfile(tmp, 32) || '0')) || 0;
-			let ok = (code >= 200 && code < 400);
+			let code = int(trim(readfile(tmp + '.code', 32) || '0')) || 0;
+			let resp = trim(readfile(tmp, 4096) || '');
 
 			unlink(tmp);
+			unlink(tmp + '.code');
+
+			/*
+			 * 成功判据：HTTP 200 且正文含回执令牌 0637。
+			 * 设备断连时 curl 写不出状态码，code 为 0。
+			 */
+			let ok = (code == 200 && index(resp, '0637') >= 0);
+
+			let error = '';
+
+			if (!ok) {
+				if (code == 0)
+					error = '设备无响应（凭据被拒或连接失败）';
+				else if (code == 404)
+					error = 'HTTP 404：路径或请求方法不对（设备仅接受 POST ' + c.path + '）';
+				else if (code >= 200 && code < 400)
+					error = 'HTTP ' + code + '：响应缺少回执令牌 0637';
+				else
+					error = 'HTTP ' + code;
+			}
 
 			return {
 				ok: ok,
 				code: code,
 				url: url,
+				body: body,
+				resp: resp,
 				cpu: cpu,
 				ram: ram,
 				vol: vol,
-				error: ok ? '' : ((code > 0) ? ('HTTP ' + code) : '连接失败或超时')
+				error: error
 			};
 		}
 	}

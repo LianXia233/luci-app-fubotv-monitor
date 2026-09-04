@@ -21,24 +21,38 @@ procd 守护进程 (ucode + uloop)
     |     速率基准优先读 /sys/class/net/<if>/speed，
     |     网桥则遍历 brif/ 成员口取最大值，取不到才回退到 UCI 的 linkspeed
     |
-    +-- HTTP GET --> http://<时钟地址>/PCM?admin=root&T1=<cpu>&T2=<ram>&T3=<vol>
-                     每秒/每 N 秒一次，最新结果写入 /var/run/fubotv.status
+    +-- HTTP POST --> http://<时钟地址>/PCM
+    |                 表单主体: admin=root&T1=<cpu>&T2=<ram>&T3=<vol>
+    |                 每秒/每 N 秒一次，最新结果写入 /var/run/fubotv.status
 ```
 
 LuCI 界面通过 `luci.fubotv.status` 读取状态文件，每 2 秒刷新一次仪表盘。
 
 ### 协议细节
 
+协议已于 2026-09-05 在实机（192.168.88.244）验证，要点：
+
+- **必须 POST 表单主体**（`Content-Type: application/x-www-form-urlencoded`），
+  设备对 `GET /PCM` 返回 404——原版 exe 就是 POST，静态分析阶段误判为 GET
+- **凭据 `admin=root` 是表单首字段**，无前导 `&`；凭据缺失或错误时设备直接
+  断开连接，不返回任何 HTTP 响应（客户端表现为连接重置）
+- 成功响应：`HTTP 200`，正文为固定回执令牌 **`0637`**，本插件以
+  「200 + 令牌 0637」作为成功判据
+
 请求格式：
 
 ```
-GET http://<host>[:port]<path>[?<auth>&<p_cpu>=<v>&<p_ram>=<v>&<p_vol>=<v>] HTTP/1.1
+POST http://<host>[:port]<path> HTTP/1.1
+Content-Type: application/x-www-form-urlencoded
+
+admin=root&T1=<cpu>&T2=<ram>&T3=<vol>
 ```
 
 默认即原版上位机的格式：
 
 ```
-GET http://192.168.88.244/PCM?admin=root&T1=25&T2=60&T3=3
+POST http://192.168.88.244/PCM
+主体: admin=root&T1=25&T2=60&T3=3
 ```
 
 数值一律取整（时钟屏幕空间有限），保留 0-100 区间。
@@ -78,7 +92,7 @@ make package/luci-app-fubotv-monitor/compile V=s
 ```bash
 opkg update
 opkg install curl ucode ucode-mod-fs ucode-mod-uci ucode-mod-ubus \
-             ucode-mod-uloop ucode-mod-json rpcd-mod-ucode
+             ucode-mod-uloop rpcd-mod-ucode
 ```
 
 ```bash
@@ -117,7 +131,7 @@ rm -rf /tmp/luci-indexcache /tmp/luci-modulecache
 | `interface` | string | `br-lan` | VOL 统计的 LAN 接口 |
 | `linkspeed` | int | `1000` | 接口速率回退值（Mbps），仅在自动探测失败时生效 |
 | `path` | string | `/PCM` | 上报路径 |
-| `auth` | string | `admin=root` | 附加在参数串首部的认证串，留空则不附加 |
+| `auth` | string | `admin=root` | POST 表单主体的首个字段（认证串），留空则不附加 |
 | `param_cpu` | string | `T1` | CPU 参数名 |
 | `param_ram` | string | `T2` | 内存参数名 |
 | `param_vol` | string | `T3` | LAN 占用参数名 |
@@ -152,15 +166,20 @@ uci commit fubotv
 - 最近一次请求的完整 URL
 - 失败原因（HTTP 状态码或连接错误）
 
-点「连通性测试」会立即做一次 1 秒窗口采样并发送单条请求，弹出的通知里包含完整 URL，可直接核对。
+点「连通性测试」会立即做一次 1 秒窗口采样并发送单条 POST 上报，弹出的通知里包含完整 URL、表单主体与设备响应（成功时应显示回执令牌 0637）。
 
 ### 手动复现请求
 
 ```bash
-curl -v 'http://192.168.88.244/PCM?admin=root&T1=25&T2=60&T3=3'
+curl -v -X POST 'http://192.168.88.244/PCM' \
+	-H 'Content-Type: application/x-www-form-urlencoded' \
+	--data 'admin=root&T1=25&T2=60&T3=3'
 ```
 
-返回 200 即说明地址、路径、认证串都正确。
+返回 200 且正文为 `0637` 即说明地址、路径、认证串都正确。
+
+**注意**：不要用 `curl 'http://<时钟>/PCM?...'`（GET）去验证——设备对 GET 返回 404，
+这是排查时最常见的误判。
 
 ### 常用排查命令
 
@@ -191,6 +210,8 @@ ucode /usr/share/fubotv/report.uc
 速率基准探测失败，回退到了 `linkspeed`。界面上接口速率后面带 `*` 号即表示未自动探测到。此时手动把 `linkspeed` 改成实际速率即可。
 
 **上报全部失败**
+- 用 GET 而非 POST 验证（设备对 GET /PCM 返回 404，属预期行为）
+- 认证串缺失或不是 `admin=root`（设备直接断连，无 HTTP 响应）
 - 时钟与路由器不在同一网段
 - 时钟固件不支持电脑性能监控（部分一代/二代固件无此功能）
 - 时钟后台未开启对应主题
@@ -233,14 +254,14 @@ luci-app-fubotv-monitor/
 | 方法 | 说明 |
 |---|---|
 | `status()` | 返回运行态、三项指标、上报统计、自动探测到的接口速率 |
-| `test()` | 采样 1 秒后发送单条请求，返回成功与否、HTTP 状态码、完整 URL |
+| `test()` | 采样 1 秒后发送单条 POST 上报，返回成功与否、HTTP 状态码、设备响应、完整 URL 与表单主体 |
 
 ---
 
 ## 六、安全说明
 
 - 上报为**明文 HTTP**，同网段设备均可观测到 CPU / 内存数据。泄露面很小，但如需规避，请配合 VLAN 隔离。
-- `admin=root` 是时钟固件的硬编码凭据，同网段任何人都能向时钟写入显示内容。这是原版上位机的既有设计，本插件为兼容而保留，可在配置中清空。
+- `admin=root` 是时钟固件的硬编码凭据（POST 表单首字段），同网段任何人都能向时钟写入显示内容。这是原版上位机的既有设计，本插件为兼容而保留，可在配置中清空。
 - 插件不含任何对外网的连接，目标地址完全由使用者指定。
 
 ---

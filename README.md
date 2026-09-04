@@ -33,7 +33,7 @@ LuCI 界面通过 `luci.fubotv.status` 读取状态文件，每 2 秒刷新一�
 协议已于 2026-09-05 在实机（192.168.88.244）验证，要点：
 
 - **必须 POST 表单主体**（`Content-Type: application/x-www-form-urlencoded`），
-  设备对 `GET /PCM` 返回 404——原版 exe 就是 POST，静态分析阶段误判为 GET
+  设备对 `GET /PCM` 返回 404
 - **凭据 `admin=root` 是表单首字段**，无前导 `&`；凭据缺失或错误时设备直接
   断开连接，不返回任何 HTTP 响应（客户端表现为连接重置）
 - 成功响应：`HTTP 200`，正文为固定回执令牌 **`0637`**，本插件以
@@ -116,7 +116,7 @@ rm -rf /tmp/luci-indexcache /tmp/luci-modulecache
 
 ## 三、配置
 
-界面路径：**服务 -> FuBoTv 上报**
+界面路径：**服务 -> FuBoTv 上报**。所有上报参数都可以在页面中手动填写，保存并应用后立即生效。
 
 ### UCI 配置项
 
@@ -124,7 +124,7 @@ rm -rf /tmp/luci-indexcache /tmp/luci-modulecache
 
 | 选项 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
-| `enabled` | bool | `0` | 是否启用周期上报 |
+| `enabled` | bool | `0` | 是否启用周期上报；LuCI 中的「启用上报」开关关闭时不会发送请求 |
 | `host` | string | `192.168.88.244` | 时钟的 IP 或主机名，支持 IPv6（自动加方括号） |
 | `port` | string | `80` | HTTP 端口，留空或 `80` 时 URL 中省略 |
 | `interval` | int | `1` | 上报间隔（秒），范围 1-3600 |
@@ -268,4 +268,4 @@ luci-app-fubotv-monitor/
 
 ## 七、许可
 
-MIT
+本项目采用 [MIT License](LICENSE)。

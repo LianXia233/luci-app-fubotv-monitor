@@ -149,18 +149,32 @@ function curl_error(rc) {
 }
 
 function send(url, body) {
-	/* -f: HTTP 错误时返回非零; -m: 总超时; --data: POST 主体; -o: 丢弃响应体 */
-	let cmd = 'curl -fsS -o /dev/null -m ' + int(HTTP_TIMEOUT / 1000) +
+	let tmp = '/tmp/.fubotv_report_' + time();
+	let cmd = 'curl -s -o ' + shquote(tmp) + ' -w "%{http_code}" -m ' + int(HTTP_TIMEOUT / 1000) +
 		' -H ' + shquote('Content-Type: application/x-www-form-urlencoded') +
 		' --data ' + shquote(body) +
-		' ' + shquote(url) + ' 2>/dev/null';
+		' ' + shquote(url) + ' > ' + shquote(tmp + '.code') + ' 2>/dev/null';
 
 	let rc = system(cmd, HTTP_TIMEOUT + 2000);
+	let code = int(trim(readfile(tmp + '.code', 32) || '0')) || 0;
+	let resp = trim(readfile(tmp, 4096) || '');
 
-	if (rc == 0)
-		return { ok: true, code: 200, error: '' };
+	unlink(tmp);
+	unlink(tmp + '.code');
 
-	return { ok: false, code: 0, error: curl_error(rc) };
+	if (rc == 0 && code == 200 && index(resp, '0637') >= 0)
+		return { ok: true, code: code, error: '' };
+
+	if (code == 0)
+		return { ok: false, code: 0, error: curl_error(rc) };
+
+	if (code == 404)
+		return { ok: false, code: code, error: 'HTTP 404：路径或请求方法不对' };
+
+	if (code >= 200 && code < 400)
+		return { ok: false, code: code, error: 'HTTP ' + code + '：响应缺少回执令牌 0637' };
+
+	return { ok: false, code: code, error: 'HTTP ' + code };
 }
 
 /* ----------------------------------------------------------------- 状态文件 */

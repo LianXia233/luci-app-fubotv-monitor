@@ -199,7 +199,9 @@ return view.extend({
 
 		var s = m.section(form.TypedSection, 'main', _('上报设置'),
 			_('修改后点击「保存并应用」，procd 会自动重载上报服务。'));
-		s.anonymous = true;
+		/* 保留固定 main section，所有参数均可在 LuCI 中手动填写。 */
+		s.anonymous = false;
+		s.addremove = false;
 
 		var o;
 

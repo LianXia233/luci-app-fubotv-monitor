@@ -81,7 +81,7 @@ function cpu_usage() {
 
 	let parts = fields(lines(data)[0]);
 
-	if (parts[0] != 'cpu' || length(parts) < 8)
+	if (parts[0] != 'cpu' || length(parts) < 9)
 		return 0;
 
 	let user    = int(parts[1]) || 0;
@@ -125,15 +125,18 @@ function mem_usage() {
 
 	let total = 0;
 	let avail = 0;
+	let have_avail = false;
 
 	for (let line in lines(data)) {
 		if (match(line, /^MemTotal:/))
 			total = int(fields(line)[1]) || 0;
-		else if (match(line, /^MemAvailable:/))
+		else if (match(line, /^MemAvailable:/)) {
 			avail = int(fields(line)[1]) || 0;
+			have_avail = true;
+		}
 	}
 
-	if (total <= 0)
+	if (total <= 0 || !have_avail)
 		return 0;
 
 	return round1((total - avail) * 100 / total);

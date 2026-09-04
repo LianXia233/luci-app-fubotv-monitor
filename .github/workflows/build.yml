@@ -42,7 +42,7 @@ jobs:
               echo ""
               echo "- 初始版本：FuBoTv 监控 Luci 插件"
               echo "- 上报 CPU / RAM / LAN 接口带宽占用率至 ESP8266 天气时钟"
-              echo "- 上报协议兼容原 Windows 上位机：GET /PCM?T1=<cpu>&T2=<ram>&T3=<vol>"
+              echo "- 上报协议兼容原 Windows 上位机：POST /PCM"
               echo ""
               cat CHANGELOG.md
             } > "$TMP"
@@ -151,7 +151,7 @@ jobs:
             FuBoTv Monitor Luci 插件初始发布。
 
             - 向 ESP8266 天气时钟上报路由器 CPU / RAM / LAN 带宽占用率
-            - 协议兼容原 Windows 上位机：GET /PCM?T1=<cpu>&T2=<ram>&T3=<vol>
+            - 协议兼容原 Windows 上位机：POST /PCM
             - 上报目标 IP / 端口 / 路径 / 鉴权均可经 UCI 自定义
             - procd 常驻守护进程 + rpcd/ubus 后端 + LuCI 实时仪表盘
             - 包架构为 all，单 SDK 编译产物可在所有平台安装

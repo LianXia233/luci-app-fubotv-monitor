@@ -90,6 +90,20 @@ jobs:
           mkdir -p "sdk/package/${{ env.PKG_NAME }}"
           cp -r Makefile root htdocs "sdk/package/${{ env.PKG_NAME }}/"
 
+      - name: Prepare feeds (install luci)
+        working-directory: sdk
+        run: |
+          set -euo pipefail
+          # 预编译 SDK 默认未执行 feeds update/install，需手动拉取 luci feed，
+          # 否则 include $(TOPDIR)/feeds/luci/luci.mk 会因 feeds/luci 不存在而失败。
+          if grep -q "src-git luci" feeds.conf.default; then
+            sed -i 's#^src-git luci .*#src-git luci https://github.com/openwrt/luci.git;openwrt-25.12#' feeds.conf.default
+          else
+            echo "src-git luci https://github.com/openwrt/luci.git;openwrt-25.12" >> feeds.conf.default
+          fi
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
       - name: Build APK
         working-directory: sdk
         run: |

@@ -15,7 +15,6 @@ LUCI_DEPENDS:= \
 	+ucode-mod-uci \
 	+ucode-mod-ubus \
 	+ucode-mod-uloop \
-	+ucode-mod-json \
 	+rpcd \
 	+rpcd-mod-ucode
 LUCI_PKGARCH:=all

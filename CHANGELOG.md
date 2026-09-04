@@ -9,6 +9,7 @@
 - 守护进程常驻（procd 托管），首拍建立差值基准，第二拍起正常上报
 - 界面：LuCI 配置页 + 实时仪表盘（2 秒轮询），含连通性测试
 - 采集库与上报守护进程用 ucode 实现，后端经 rpcd 暴露 ubus 接口 `luci.fubotv`
+- 修复：移除 `LUCI_DEPENDS` 中已废弃的 `ucode-mod-json` 依赖。OpenWrt 25.x 的 JSON 能力已内置进 `ucode`/`libucode` 核心（`import * as json from 'json'` 解析为内置模块），原 `ucode-mod-json` 包在 25.x 仓库中不存在，会导致 `apk add` 报 `ucode-mod-json (no such package)` 而安装失败
 
 ## Unreleased
 

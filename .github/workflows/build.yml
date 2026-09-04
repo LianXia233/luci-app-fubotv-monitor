@@ -1,0 +1,138 @@
+name: Build APK & Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+# 工作流内所有写操作均使用仓库内置的 GITHUB_TOKEN（Secrets 注入），
+# 不引用任何明文令牌。令牌仅在本仓库的 GitHub Actions 运行环境中由 GitHub 自动提供。
+permissions:
+  contents: write
+
+env:
+  SDK_VER: "25.12.5"
+  SDK_TARGET: "x86"
+  SDK_SUBTARGET: "64"
+  PKG_NAME: "luci-app-fubotv-monitor"
+  RELEASE_TAG: "v1.0.0"
+
+jobs:
+  # 1) 检出代码并更新 CHANGELOG.md 记录 v1.0.0 变更，提交后推回仓库。
+  #    提交信息带 [skip ci]，避免触发工作流死循环。
+  changelog:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Ensure v1.0.0 entry in CHANGELOG.md
+        run: |
+          set -euo pipefail
+          DATE=$(date +%Y-%m-%d)
+          if grep -q "## ${{ env.RELEASE_TAG }}" CHANGELOG.md; then
+            echo "CHANGELOG.md already records ${{ env.RELEASE_TAG }}"
+          else
+            TMP=$(mktemp)
+            {
+              echo "## ${{ env.RELEASE_TAG }} - ${DATE}"
+              echo ""
+              echo "- 初始版本：FuBoTv 监控 Luci 插件"
+              echo "- 上报 CPU / RAM / LAN 接口带宽占用率至 ESP8266 天气时钟"
+              echo "- 上报协议兼容原 Windows 上位机：GET /PCM?T1=<cpu>&T2=<ram>&T3=<vol>"
+              echo ""
+              cat CHANGELOG.md
+            } > "$TMP"
+            mv "$TMP" CHANGELOG.md
+          fi
+
+      - name: Commit & push CHANGELOG
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md
+          if ! git diff --cached --quiet; then
+            git commit -m "docs: record ${{ env.RELEASE_TAG }} changes in CHANGELOG [skip ci]"
+            git remote set-url origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
+            git push
+          else
+            echo "No CHANGELOG changes to commit."
+          fi
+
+  # 2) 用 OpenWrt 25.12.5 SDK 编译 apk 软件包。
+  #    包为 Architecture: all，单一 x86/64 SDK 编译产物即可在所有平台安装。
+  build:
+    needs: changelog
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install host tools
+        run: sudo apt-get update && sudo apt-get install -y zstd
+
+      - name: Download OpenWrt SDK (apk)
+        run: |
+          set -euo pipefail
+          SDK="openwrt-sdk-${{ env.SDK_VER }}-${{ env.SDK_TARGET }}-${{ env.SDK_SUBTARGET }}_gcc-14.3.0_musl.Linux-x86_64.tar.zst"
+          echo "SDK tarball: $SDK"
+          curl -fsSL "https://downloads.openwrt.org/releases/${{ env.SDK_VER }}/targets/${{ env.SDK_TARGET }}/${{ env.SDK_SUBTARGET }}/$SDK" -o sdk.tar.zst
+          mkdir -p sdk
+          tar -I zstd -xf sdk.tar.zst -C sdk --strip-components=1
+
+      - name: Stage package into SDK
+        run: |
+          set -euo pipefail
+          rm -rf "sdk/package/${{ env.PKG_NAME }}"
+          mkdir -p "sdk/package/${{ env.PKG_NAME }}"
+          cp -r Makefile root htdocs "sdk/package/${{ env.PKG_NAME }}/"
+
+      - name: Build APK
+        working-directory: sdk
+        run: |
+          set -euo pipefail
+          echo "CONFIG_PACKAGE_${{ env.PKG_NAME }}=m" >> .config
+          echo "CONFIG_USE_APK=y" >> .config
+          make defconfig
+          if ! grep -q '^CONFIG_USE_APK=y' .config; then
+            echo "::error::CONFIG_USE_APK not supported by this SDK. OpenWrt 25.x or newer is required for APK builds."
+            exit 1
+          fi
+          make package/${{ env.PKG_NAME }}/compile V=sw -j"$(nproc)"
+
+      - name: Collect APK
+        run: |
+          set -euo pipefail
+          mkdir -p output
+          find sdk/bin -name '${{ env.PKG_NAME }}*.apk' -exec cp {} output/ \;
+          ls -l output/
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fubotv-apk
+          path: output/*.apk
+          if-no-files-found: error
+
+  # 3) 编译成功后，把 apk 上传到仓库 Releases（标签 v1.0.0）。
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download APK
+        uses: actions/download-artifact@v4
+        with:
+          name: fubotv-apk
+          path: release-files
+
+      - name: Create / Update Release ${{ env.RELEASE_TAG }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: FuBoTv Monitor ${{ env.RELEASE_TAG }}
+          files: release-files/*
+          overwrite: true
+          fail_on_unmatched_files: false

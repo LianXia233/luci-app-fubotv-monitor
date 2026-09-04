@@ -1,0 +1,10 @@
+{
+	"admin/services/fubotv": {
+		"title": "FuBoTv 上报",
+		"order": 60,
+		"action": {
+			"type": "view",
+			"path": "fubotv/status"
+		}
+	}
+}

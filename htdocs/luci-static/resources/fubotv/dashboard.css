@@ -1,0 +1,206 @@
+/* fubotv-monitor -- 仪表盘样式
+ *
+ * 配色使用半透明叠层，深浅主题通用。
+ */
+
+.ftv-dash {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+	gap: 14px;
+	margin: 0 0 18px;
+}
+
+.ftv-card {
+	position: relative;
+	padding: 16px 18px 18px;
+	border-radius: 12px;
+	border: 1px solid rgba(127, 127, 127, 0.22);
+	background: rgba(127, 127, 127, 0.06);
+	overflow: hidden;
+	transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+}
+
+.ftv-card:hover {
+	transform: translateY(-2px);
+	border-color: rgba(127, 127, 127, 0.38);
+	box-shadow: 0 6px 18px rgba(0, 0, 0, 0.10);
+}
+
+.ftv-card::before {
+	content: "";
+	position: absolute;
+	inset: 0 auto 0 0;
+	width: 3px;
+	background: var(--ftv-accent, rgba(127, 127, 127, 0.5));
+	opacity: .85;
+}
+
+.ftv-head {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 8px;
+	margin-bottom: 10px;
+}
+
+.ftv-key {
+	font-size: 13px;
+	font-weight: 500;
+	letter-spacing: .12em;
+	text-transform: uppercase;
+	opacity: .75;
+}
+
+.ftv-desc {
+	font-size: 12px;
+	opacity: .55;
+}
+
+.ftv-num {
+	display: flex;
+	align-items: baseline;
+	gap: 3px;
+	margin-bottom: 12px;
+	font-variant-numeric: tabular-nums;
+	font-feature-settings: "tnum";
+	line-height: 1;
+}
+
+.ftv-num-v {
+	font-size: 34px;
+	font-weight: 500;
+	color: var(--ftv-accent, inherit);
+}
+
+.ftv-num-u {
+	font-size: 15px;
+	opacity: .55;
+}
+
+.ftv-bar {
+	position: relative;
+	height: 8px;
+	border-radius: 999px;
+	background: rgba(127, 127, 127, 0.20);
+	overflow: hidden;
+}
+
+.ftv-bar-fill {
+	height: 100%;
+	border-radius: 999px;
+	width: 0;
+	transition: width .65s cubic-bezier(.22, .61, .36, 1);
+	background: linear-gradient(90deg,
+		var(--ftv-bar-from, #7f7f7f),
+		var(--ftv-bar-to, #9a9a9a));
+}
+
+.ftv-foot {
+	margin-top: 10px;
+	font-size: 12px;
+	opacity: .60;
+	display: flex;
+	justify-content: space-between;
+	gap: 8px;
+}
+
+/* ------------------------------------------------------------- 分档配色 */
+
+.ftv-lv-low {
+	--ftv-accent: #2f9e52;
+	--ftv-bar-from: #2f9e52;
+	--ftv-bar-to: #46c268;
+}
+
+.ftv-lv-mid {
+	--ftv-accent: #b7791f;
+	--ftv-bar-from: #c98a22;
+	--ftv-bar-to: #e6b13f;
+}
+
+.ftv-lv-high {
+	--ftv-accent: #c93c37;
+	--ftv-bar-from: #d94b45;
+	--ftv-bar-to: #ef6b64;
+}
+
+.ftv-lv-idle {
+	--ftv-accent: #6b7280;
+	--ftv-bar-from: #7b838f;
+	--ftv-bar-to: #98a1ad;
+}
+
+/* --------------------------------------------------------------- 状态条 */
+
+.ftv-status {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 10px 18px;
+	padding: 12px 16px;
+	margin: 0 0 18px;
+	border-radius: 12px;
+	border: 1px solid rgba(127, 127, 127, 0.22);
+	background: rgba(127, 127, 127, 0.06);
+	font-size: 13px;
+}
+
+.ftv-badge {
+	display: inline-flex;
+	align-items: center;
+	gap: 7px;
+	font-weight: 500;
+	padding: 3px 11px 3px 9px;
+	border-radius: 999px;
+	background: rgba(127, 127, 127, 0.16);
+}
+
+.ftv-dot {
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background: #6b7280;
+	flex: none;
+}
+
+.ftv-badge.ftv-on .ftv-dot {
+	background: #2f9e52;
+	box-shadow: 0 0 0 3px rgba(47, 158, 82, .18);
+}
+
+.ftv-badge.ftv-off .ftv-dot {
+	background: #c93c37;
+	box-shadow: 0 0 0 3px rgba(201, 60, 55, .16);
+}
+
+.ftv-meta {
+	opacity: .72;
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+}
+
+.ftv-meta b {
+	font-weight: 500;
+	opacity: 1;
+	font-variant-numeric: tabular-nums;
+}
+
+.ftv-err {
+	color: #c93c37;
+}
+
+.ftv-url {
+	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+	font-size: 12px;
+	opacity: .70;
+	word-break: break-all;
+	flex-basis: 100%;
+}
+
+.ftv-hint {
+	font-size: 12px;
+	opacity: .60;
+	margin: 0 0 18px;
+	line-height: 1.7;
+}

@@ -1,0 +1,29 @@
+config fubotv 'main'
+	# 是否启用周期上报
+	option enabled '0'
+
+	# 天气时钟的 IP 地址或主机名
+	option host '192.168.88.244'
+
+	# HTTP 端口，留空或 80 时不写入 URL
+	option port '80'
+
+	# 上报间隔（秒），范围 1-3600
+	option interval '1'
+
+	# VOL 指标统计的 LAN 接口
+	option interface 'br-lan'
+
+	# 接口速率回退值（Mbps）。仅在无法从 sysfs 自动探测时生效
+	option linkspeed '1000'
+
+	# 上报路径
+	option path '/PCM'
+
+	# 附加在参数串首部的认证串，留空则不附加
+	option auth 'admin=root'
+
+	# 三项指标对应的 URL 参数名
+	option param_cpu 'T1'
+	option param_ram 'T2'
+	option param_vol 'T3'

@@ -1,0 +1,180 @@
+#!/usr/bin/env ucode
+'use strict';
+/*
+ * fubotv-monitor -- rpcd ucode 后端
+ *
+ * ubus 对象: luci.fubotv
+ *   status()  读取守护进程写入的最新指标与上报统计
+ *   test()    立即采样一次并向时钟发送一条请求，用于验证连通性
+ */
+
+import { readfile, unlink } from 'fs';
+import { cursor } from 'uci';
+import * as json from 'json';
+import * as ubus from 'ubus';
+import { cpu_usage, mem_usage, vol_usage, iface_speed_mbps, shquote } from '/usr/share/fubotv/lib.uc';
+
+const STATUS_FILE = '/var/run/fubotv.status';
+const HTTP_TIMEOUT = 3000;
+
+/* ------------------------------------------------------------------ 工具 */
+
+function uci_conf() {
+	let uci = cursor();
+
+	uci.load('fubotv');
+
+	let get = function(key, def) {
+		let v = uci.get('fubotv', 'main', key);
+
+		return (v != null && v != '') ? v : def;
+	};
+
+	return {
+		enabled: get('enabled', '0') == '1',
+		host: get('host', ''),
+		port: get('port', ''),
+		interval: int(get('interval', '1')) || 1,
+		iface: get('interface', 'br-lan'),
+		linkspeed: int(get('linkspeed', '1000')) || 1000,
+		path: get('path', '/PCM'),
+		auth: get('auth', ''),
+		p_cpu: get('param_cpu', 'T1'),
+		p_ram: get('param_ram', 'T2'),
+		p_vol: get('param_vol', 'T3')
+	};
+}
+
+function build_url(c, cpu, ram, vol) {
+	let host = c.host;
+
+	if (index(host, ':') >= 0 && substr(host, 0, 1) != '[')
+		host = '[' + host + ']';
+
+	let url = 'http://' + host;
+
+	if (c.port != '' && c.port != '80')
+		url += ':' + c.port;
+
+	let path = c.path;
+
+	if (path != '' && substr(path, 0, 1) != '/')
+		path = '/' + path;
+
+	url += (path != '') ? path : '/PCM';
+
+	let q = [];
+
+	if (c.auth != '')
+		push(q, c.auth);
+
+	push(q, c.p_cpu + '=' + int(cpu + 0.5));
+	push(q, c.p_ram + '=' + int(ram + 0.5));
+	push(q, c.p_vol + '=' + int(vol + 0.5));
+
+	return url + '?' + join(q, '&');
+}
+
+function service_running() {
+	let s = ubus.call('service', 'list', { name: 'fubotv' });
+
+	if (!s || !s.fubotv || !s.fubotv.instances)
+		return false;
+
+	for (let k in keys(s.fubotv.instances)) {
+		if (s.fubotv.instances[k].running)
+			return true;
+	}
+
+	return false;
+}
+
+/* ------------------------------------------------------------------ 方法 */
+
+return {
+	status: {
+		args: { },
+		call: function(args) {
+			let c = uci_conf();
+			let raw = readfile(STATUS_FILE, 65536);
+			let st = null;
+
+			if (raw != null && raw != '') {
+				try {
+					st = json.decode(raw);
+				}
+				catch (e) {
+					st = null;
+				}
+			}
+
+			let running = service_running();
+			let speed = iface_speed_mbps(c.iface);
+
+			return {
+				running: running,
+				configured: c.host != '',
+				enabled: c.enabled,
+				host: c.host,
+				interval: c.interval,
+				iface: c.iface,
+				linkspeed: (speed != null) ? speed : c.linkspeed,
+				linkspeed_auto: (speed != null),
+				path: c.path,
+				cpu: (st != null) ? st.cpu : null,
+				ram: (st != null) ? st.ram : mem_usage(),
+				vol: (st != null) ? st.vol : null,
+				rx_bps: (st != null) ? st.rx_bps : null,
+				tx_bps: (st != null) ? st.tx_bps : null,
+				count: (st != null) ? st.count : 0,
+				ok: (st != null) ? st.ok : 0,
+				fail: (st != null) ? st.fail : 0,
+				last: (st != null) ? st.last : 0,
+				last_ok: (st != null) ? st.last_ok : 0,
+				error: (st != null) ? st.error : '',
+				url: (st != null) ? st.url : ''
+			};
+		}
+	},
+
+	test: {
+		args: { },
+		call: function(args) {
+			let c = uci_conf();
+
+			if (c.host == '')
+				return { ok: false, code: 0, url: '', error: '尚未配置时钟 IP 地址' };
+
+			/* CPU 与 VOL 是差值型指标，此处做一次 1 秒窗口采样 */
+			cpu_usage();
+			vol_usage(c.iface, c.linkspeed);
+			sleep(1);
+
+			let cpu = cpu_usage();
+			let ram = mem_usage();
+			let vol = vol_usage(c.iface, c.linkspeed);
+			let url = build_url(c, cpu, ram, vol);
+			let tmp = '/tmp/.fubotv_test_' + time();
+
+			/* 不经 -f，以便拿到真实 HTTP 状态码而非笼统的失败 */
+			system('curl -s -o /dev/null -w "%{http_code}" -m ' +
+				int(HTTP_TIMEOUT / 1000) + ' ' + shquote(url) +
+				' > ' + tmp + ' 2>/dev/null', 8000);
+
+			let code = int(trim(readfile(tmp, 32) || '0')) || 0;
+			let ok = (code >= 200 && code < 400);
+
+			unlink(tmp);
+
+			return {
+				ok: ok,
+				code: code,
+				url: url,
+				cpu: cpu,
+				ram: ram,
+				vol: vol,
+				error: ok ? '' : ((code > 0) ? ('HTTP ' + code) : '连接失败或超时')
+			};
+		}
+	}
+};

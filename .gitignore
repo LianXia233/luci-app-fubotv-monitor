@@ -1,0 +1,6 @@
+# CI 构建产物（不进仓库，仅 Releases 持有）
+sdk/
+sdk.tar.zst
+output/
+*.apk
+*.ipk

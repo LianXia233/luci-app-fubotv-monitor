@@ -1,0 +1,21 @@
+{
+	"luci-app-fubotv-monitor": {
+		"description": "Grant UCI and ubus access for the FuBoTv monitor reporter",
+		"read": {
+			"ubus": {
+				"luci.fubotv": ["status", "test"],
+				"service": ["list"]
+			},
+			"uci": ["fubotv"],
+			"file": {
+				"/var/run/fubotv.status": ["read"]
+			}
+		},
+		"write": {
+			"ubus": {
+				"luci.fubotv": ["test"]
+			},
+			"uci": ["fubotv"]
+		}
+	}
+}

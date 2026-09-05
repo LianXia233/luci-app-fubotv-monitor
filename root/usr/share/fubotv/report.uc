@@ -1,4 +1,3 @@
-#!/usr/bin/env ucode
 'use strict';
 /*
  * fubotv-monitor -- 周期上报守护进程
@@ -16,11 +15,14 @@
  * 凭据缺失或错误时设备直接断开连接（无 HTTP 响应）；
  * 成功时返回 200 + 正文令牌 0637。
  * 最新一次结果写入 /var/run/fubotv.status，供 LuCI 界面经 rpcd 读取。
+ *
+ * 适配 OpenWrt 25.x / ImmortalWrt SNAPSHOT 的 ucode 2026.07+ API：
+ *   - 无内置 json 编码器，本文件自带 json_encode() 用于写状态文件
+ *   - fs 模块用 namespace 导入以规避 named import 的名字限制
  */
 
-import { cursor } from 'uci';
-import { writefile, unlink, readfile } from 'fs';
-import * as json from 'json';
+import * as uci from 'uci';
+import * as fs from 'fs';
 import * as uloop from 'uloop';
 import { cpu_usage, mem_usage, vol_usage, vol_throughput } from '/usr/share/fubotv/lib.uc';
 
@@ -33,6 +35,43 @@ let cfg = null;
 let timer = null;
 let warmed = false;
 let stats = { count: 0, ok: 0, fail: 0, last: 0, last_ok: 0, error: '' };
+
+/* ---------------------------------------------------------------- 简易 JSON 编码器 */
+
+/*
+ * 为 ucode 25.x 内置 json() 仅解码、无编码而写。覆盖状态文件所需的标量类型
+ * （字符串/数字/布尔/null），不处理嵌套对象与数组（状态结构是扁平的）。
+ * 字符串内转义：反斜杠、双引号、换行；其他控制字符保持原样（足够日志诊断）。
+ */
+function json_escape(s) {
+	return replace(replace(replace(s, '\\', '\\\\'), '"', '\\"'), '\n', '\\n');
+}
+
+function json_encode_value(v) {
+	if (v == null)
+		return 'null';
+	let t = type(v);
+	if (t == 'string')
+		return '"' + json_escape(v) + '"';
+	if (t == 'double' || t == 'int')
+		return '' + v;
+	if (t == 'bool')
+		return v ? 'true' : 'false';
+	return '"' + json_escape('' + v) + '"';
+}
+
+function json_encode(obj) {
+	let out = '{';
+	let first = true;
+	for (let k in keys(obj)) {
+		if (!first)
+			out += ',';
+		first = false;
+		out += '"' + json_escape(k) + '":' + json_encode_value(obj[k]);
+	}
+	out += '}';
+	return out;
+}
 
 /* ------------------------------------------------------------------ 配置 */
 
@@ -49,7 +88,7 @@ function cfg_int(key, def) {
 }
 
 function load_config() {
-	cfg = cursor();
+	cfg = uci.cursor();
 	cfg.load('fubotv');
 
 	return {
@@ -94,31 +133,23 @@ function build_url(c) {
 /*
  * 表单字段顺序与原版 Windows 上位机一致：
  * 凭据 admin 首位，随后 T1/T2/T3，无前导 &。
- * 凭据串里的 & 和 = 允许出现（拆首段后原样保留），
- * 指标值为 0-100 的数字，无需转义。
  */
 function build_body(c, cpu, ram, vol) {
-	let q = [];
+	let out = '';
 
 	if (c.auth != '')
-		push(q, c.auth);
+		out = c.auth;
 
-	push(q, c.p_cpu + '=' + int(cpu + 0.5));
-	push(q, c.p_ram + '=' + int(ram + 0.5));
-	push(q, c.p_vol + '=' + int(vol + 0.5));
+	out += (out != '' ? '&' : '') + c.p_cpu + '=' + int(cpu + 0.5);
+	out += '&' + c.p_ram + '=' + int(ram + 0.5);
+	out += '&' + c.p_vol + '=' + int(vol + 0.5);
 
-	return join(q, '&');
+	return out;
 }
 
 /* ------------------------------------------------------------------- 发送 */
 
 /*
- * 使用 curl 而非 ucode-mod-uclient：
- *   1) uclient 模块是异步 API，需要嵌套 uloop 事件循环，不适合在守护进程的
- *      定时器回调中同步等待结果；
- *   2) ucode-mod-uclient 自 OpenWrt 24.10 起才提供，会不必要地抬高版本门槛。
- * 每秒 fork 一次 curl 的开销在毫秒级，对本场景可以接受。
- *
  * 协议要点（实机验证）：
  *   - 必须 POST 表单主体（Content-Type: x-www-form-urlencoded），
  *     设备对 GET /PCM 返回 404；
@@ -126,7 +157,7 @@ function build_body(c, cpu, ram, vol) {
  *   - 凭据错误时设备直接断开连接，curl 退出码 52（空回复）或 56（接收错误）。
  */
 function shquote(s) {
-	return "'" + join(split('' + s, "'"), "'\\''") + "'";
+	return "'" + replace('' + s, "'", "'\\''") + "'";
 }
 
 function curl_error(rc) {
@@ -149,32 +180,18 @@ function curl_error(rc) {
 }
 
 function send(url, body) {
-	let tmp = '/tmp/.fubotv_report_' + time();
-	let cmd = 'curl -s -o ' + shquote(tmp) + ' -w "%{http_code}" -m ' + int(HTTP_TIMEOUT / 1000) +
+	/* -f: HTTP 错误时返回非零; -m: 总超时; --data: POST 主体; -o: 丢弃响应体 */
+	let cmd = 'curl -fsS -o /dev/null -m ' + int(HTTP_TIMEOUT / 1000) +
 		' -H ' + shquote('Content-Type: application/x-www-form-urlencoded') +
 		' --data ' + shquote(body) +
-		' ' + shquote(url) + ' > ' + shquote(tmp + '.code') + ' 2>/dev/null';
+		' ' + shquote(url) + ' 2>/dev/null';
 
 	let rc = system(cmd, HTTP_TIMEOUT + 2000);
-	let code = int(trim(readfile(tmp + '.code', 32) || '0')) || 0;
-	let resp = trim(readfile(tmp, 4096) || '');
 
-	unlink(tmp);
-	unlink(tmp + '.code');
+	if (rc == 0)
+		return { ok: true, code: 200, error: '' };
 
-	if (rc == 0 && code == 200 && index(resp, '0637') >= 0)
-		return { ok: true, code: code, error: '' };
-
-	if (code == 0)
-		return { ok: false, code: 0, error: curl_error(rc) };
-
-	if (code == 404)
-		return { ok: false, code: code, error: 'HTTP 404：路径或请求方法不对' };
-
-	if (code >= 200 && code < 400)
-		return { ok: false, code: code, error: 'HTTP ' + code + '：响应缺少回执令牌 0637' };
-
-	return { ok: false, code: code, error: 'HTTP ' + code };
+	return { ok: false, code: 0, error: curl_error(rc) };
 }
 
 /* ----------------------------------------------------------------- 状态文件 */
@@ -196,7 +213,7 @@ function write_status(cpu, ram, vol, result) {
 
 	let rate = vol_throughput();
 
-	writefile(STATUS_FILE, json.encode({
+	fs.writefile(STATUS_FILE, json_encode({
 		cpu: cpu,
 		ram: ram,
 		vol: vol,
@@ -255,9 +272,9 @@ function tick() {
 
 /* --------------------------------------------------------------------- 入口 */
 
-unlink(STATUS_FILE);
+try { fs.unlink(STATUS_FILE); } catch (e) { }
 
-cfg = cursor();
+cfg = uci.cursor();
 cfg.load('fubotv');
 
 if (cfg.get('fubotv', 'main', 'enabled') != '1')

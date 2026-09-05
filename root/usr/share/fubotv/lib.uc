@@ -1,4 +1,3 @@
-#!/usr/bin/env ucode
 'use strict';
 /*
  * fubotv-monitor -- 系统指标采集库
@@ -10,38 +9,17 @@
  *
  * CPU 与 VOL 均为差值型指标，需要在进程内保留上一次快照，
  * 因此调用方必须常驻（由 procd 托管的守护进程），不能每次重新 exec。
+ *
+ * 适配 OpenWrt 25.x / ImmortalWrt SNAPSHOT 的 ucode 2026.07+ API：
+ *   - fs 模块导出 readfile/writefile/open/unlink/lsdir（无 close/read/readdir）
+ *   - 文件句柄自带 f.read() / f.close()
+ *   - 顶层导出必须用 export { ... }（return { } 仅供 rpcd compile() 加载）
+ *   - 无内置 json 编码器（全局 json() 仅为解码器）
  */
 
-import { open, close, read, readdir } from 'fs';
+import * as fs from 'fs';
 
 /* ---------------------------------------------------------------- 基础工具 */
-
-function readfile(path, limit) {
-	let fh = open(path, 'r');
-
-	if (!fh)
-		return null;
-
-	let data = read(fh, limit || 1048576);
-
-	close(fh);
-
-	return (data != null) ? data : '';
-}
-
-function lines(str) {
-	if (str == null || str == '')
-		return [];
-
-	return split(str, '\n');
-}
-
-function fields(str) {
-	if (str == null)
-		return [];
-
-	return split(trim(str), /\s+/);
-}
 
 function clamp_pct(v) {
 	if (v == null || v != v)
@@ -50,7 +28,6 @@ function clamp_pct(v) {
 		return 0;
 	if (v > 100)
 		return 100;
-
 	return v;
 }
 
@@ -60,7 +37,23 @@ function round1(v) {
 
 /* 单引号包裹并转义内部单引号，供拼接 shell 命令时使用 */
 function shquote(s) {
-	return "'" + join(split('' + s, "'"), "'\\''") + "'";
+	return "'" + replace('' + s, "'", "'\\''") + "'";
+}
+
+function read_text(path) {
+	return fs.readfile(path);
+}
+
+function lines(str) {
+	if (str == null || str == '')
+		return [];
+	return split(str, '\n');
+}
+
+function fields(str) {
+	if (str == null)
+		return [];
+	return split(trim(str), /\s+/);
 }
 
 /* --------------------------------------------------------------- CPU 占用率 */
@@ -72,9 +65,10 @@ let cpu_prev = null;
  *   cpu user nice system idle iowait irq softirq steal guest guest_nice
  * 占用率 = (delta_total - delta_idle) / delta_total
  * 其中 idle 计入 idle + iowait，与 top / htop 口径一致。
+ * 9 字段阈值兼容 5.18+ 内核（加入 guest / guest_nice）。
  */
 function cpu_usage() {
-	let data = readfile('/proc/stat', 65536);
+	let data = read_text('/proc/stat');
 
 	if (!data)
 		return 0;
@@ -116,9 +110,10 @@ function cpu_usage() {
 /*
  * 使用 MemAvailable 而非 MemFree：前者已扣除可回收的 buff/cache，
  * 与 free(1) 的 available 列口径一致，不会因文件缓存而虚高。
+ * 老内核可能没有 MemAvailable 字段，此时降级用 MemFree 估算。
  */
 function mem_usage() {
-	let data = readfile('/proc/meminfo', 65536);
+	let data = read_text('/proc/meminfo');
 
 	if (!data)
 		return 0;
@@ -134,9 +129,11 @@ function mem_usage() {
 			avail = int(fields(line)[1]) || 0;
 			have_avail = true;
 		}
+		else if (match(line, /^MemFree:/) && !have_avail)
+			avail = int(fields(line)[1]) || 0;
 	}
 
-	if (total <= 0 || !have_avail)
+	if (total <= 0)
 		return 0;
 
 	return round1((total - avail) * 100 / total);
@@ -145,7 +142,7 @@ function mem_usage() {
 /* ------------------------------------------------------------ 接口收发字节 */
 
 function iface_bytes(ifname) {
-	let data = readfile('/proc/net/dev', 131072);
+	let data = read_text('/proc/net/dev');
 
 	if (!data)
 		return null;
@@ -177,7 +174,7 @@ function iface_bytes(ifname) {
  * 3) 都拿不到则返回 null，由调用方回退到 UCI 里的 linkspeed
  */
 function iface_speed_mbps(ifname) {
-	let s = readfile('/sys/class/net/' + ifname + '/speed', 64);
+	let s = read_text('/sys/class/net/' + ifname + '/speed');
 
 	if (s != null) {
 		let v = int(trim(s)) || 0;
@@ -186,13 +183,13 @@ function iface_speed_mbps(ifname) {
 			return v;
 	}
 
-	let members = readdir('/sys/class/net/' + ifname + '/brif');
+	let members = fs.lsdir('/sys/class/net/' + ifname + '/brif');
 
 	if (members) {
 		let best = 0;
 
 		for (let m in members) {
-			let ms = readfile('/sys/class/net/' + m + '/speed', 64);
+			let ms = read_text('/sys/class/net/' + m + '/speed');
 
 			if (ms == null)
 				continue;
@@ -260,19 +257,20 @@ function vol_usage(ifname, fallback_mbps) {
 	return round1((rx_bps + tx_bps) / 2 * 100 / (speed * 1000000));
 }
 
+function vol_throughput_get() {
+	return vol_rate;
+}
+
 /* ------------------------------------------------------------------ 导出 */
 
-return {
-	readfile: readfile,
-	lines: lines,
-	fields: fields,
-	clamp_pct: clamp_pct,
-	round1: round1,
-	shquote: shquote,
-	cpu_usage: cpu_usage,
-	mem_usage: mem_usage,
-	vol_usage: vol_usage,
-	vol_throughput: function() { return vol_rate; },
-	iface_bytes: iface_bytes,
-	iface_speed_mbps: iface_speed_mbps
+export {
+	clamp_pct,
+	round1,
+	shquote,
+	cpu_usage,
+	mem_usage,
+	iface_bytes,
+	iface_speed_mbps,
+	vol_usage,
+	vol_throughput_get as vol_throughput
 };

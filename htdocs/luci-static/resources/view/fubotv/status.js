@@ -197,9 +197,10 @@ return view.extend({
 		var m = new form.Map('fubotv', _('FuBoTv 监控上报'),
 			_('将路由器的 CPU、内存与 LAN 接口占用率，以 HTTP POST 表单推送到 ESP8266 天气时钟显示。'));
 
-		var s = m.section(form.TypedSection, 'main', _('上报设置'),
+		var s = m.section(form.TypedSection, 'fubotv', _('上报设置'),
 			_('修改后点击「保存并应用」，procd 会自动重载上报服务。'));
-		/* 保留固定 main section，所有参数均可在 LuCI 中手动填写。 */
+		/* 单 section 固定为 fubotv 类型（与 /etc/config/fubotv 中的 config fubotv 'main' 对应），
+		   不允许新增/删除，选项随 UCI 段渲染 */
 		s.anonymous = false;
 		s.addremove = false;
 
@@ -249,17 +250,17 @@ return view.extend({
 		o.rmempty = true;
 
 		o = s.option(form.Value, 'param_cpu', _('CPU 参数名'),
-			_('上报 CPU 占用率的 URL 参数名。'));
+			_('上报 CPU 占用率的表单参数名（POST 主体字段）。'));
 		o.default = 'T1';
 		o.rmempty = false;
 
 		o = s.option(form.Value, 'param_ram', _('RAM 参数名'),
-			_('上报内存占用率的 URL 参数名。'));
+			_('上报内存占用率的表单参数名（POST 主体字段）。'));
 		o.default = 'T2';
 		o.rmempty = false;
 
 		o = s.option(form.Value, 'param_vol', _('VOL 参数名'),
-			_('上报 LAN 接口带宽占用率的 URL 参数名。'));
+			_('上报 LAN 接口带宽占用率的表单参数名（POST 主体字段）。'));
 		o.default = 'T3';
 		o.rmempty = false;
 

@@ -1,4 +1,3 @@
-#!/usr/bin/env ucode
 'use strict';
 /*
  * fubotv-monitor -- rpcd ucode 后端
@@ -6,11 +5,18 @@
  * ubus 对象: luci.fubotv
  *   status()  读取守护进程写入的最新指标与上报统计
  *   test()    立即采样一次并向时钟 POST 一条上报，用于验证连通性
+ *
+ * 此文件由 rpcd 通过 compile() + call() 加载（不是 import），
+ * 所以顶层导出仍用 return { ... } 模式。
+ * 内部 import lib.uc 时使用 export { ... } 语法（25.x import 强制要求）。
+ *
+ * 适配 OpenWrt 25.x / ImmortalWrt SNAPSHOT 的 ucode 2026.07+ API：
+ *   - fs 模块用 namespace 导入；json() 是全局解码器
+ *   - named import 严格要求所有名字都在模块的 export 列表中
  */
 
-import { readfile, unlink } from 'fs';
-import { cursor } from 'uci';
-import * as json from 'json';
+import * as fs from 'fs';
+import * as uci from 'uci';
 import * as ubus from 'ubus';
 import { cpu_usage, mem_usage, vol_usage, iface_speed_mbps, shquote } from '/usr/share/fubotv/lib.uc';
 
@@ -20,12 +26,12 @@ const HTTP_TIMEOUT = 3000;
 /* ------------------------------------------------------------------ 工具 */
 
 function uci_conf() {
-	let uci = cursor();
+	let u = uci.cursor();
 
-	uci.load('fubotv');
+	u.load('fubotv');
 
 	let get = function(key, def) {
-		let v = uci.get('fubotv', 'main', key);
+		let v = u.get('fubotv', 'main', key);
 
 		return (v != null && v != '') ? v : def;
 	};
@@ -65,16 +71,16 @@ function build_url(c) {
 }
 
 function build_body(c, cpu, ram, vol) {
-	let q = [];
+	let out = '';
 
 	if (c.auth != '')
-		push(q, c.auth);
+		out = c.auth;
 
-	push(q, c.p_cpu + '=' + int(cpu + 0.5));
-	push(q, c.p_ram + '=' + int(ram + 0.5));
-	push(q, c.p_vol + '=' + int(vol + 0.5));
+	out += (out != '' ? '&' : '') + c.p_cpu + '=' + int(cpu + 0.5);
+	out += '&' + c.p_ram + '=' + int(ram + 0.5);
+	out += '&' + c.p_vol + '=' + int(vol + 0.5);
 
-	return join(q, '&');
+	return out;
 }
 
 function service_running() {
@@ -94,16 +100,18 @@ function service_running() {
 /* ------------------------------------------------------------------ 方法 */
 
 return {
-	status: {
-		args: { },
+	'luci.fubotv': {
+		status: {
+			args: { },
 		call: function(args) {
 			let c = uci_conf();
-			let raw = readfile(STATUS_FILE, 65536);
+			let raw = fs.readfile(STATUS_FILE);
 			let st = null;
 
 			if (raw != null && raw != '') {
 				try {
-					st = json.decode(raw);
+					/* ucode 25.x 全局 json() 是解码器（与旧版 import * as json 不同） */
+					st = json(raw);
 				}
 				catch (e) {
 					st = null;
@@ -172,11 +180,11 @@ return {
 				' --data ' + shquote(body) +
 				' ' + shquote(url) + ' > ' + tmp + '.code 2>/dev/null', 8000);
 
-			let code = int(trim(readfile(tmp + '.code', 32) || '0')) || 0;
-			let resp = trim(readfile(tmp, 4096) || '');
+			let code = int(trim(fs.readfile(tmp + '.code') || '0')) || 0;
+			let resp = trim(fs.readfile(tmp) || '');
 
-			unlink(tmp);
-			unlink(tmp + '.code');
+			fs.unlink(tmp);
+			fs.unlink(tmp + '.code');
 
 			/*
 			 * 成功判据：HTTP 200 且正文含回执令牌 0637。
@@ -209,5 +217,6 @@ return {
 				error: error
 			};
 		}
+	}
 	}
 };

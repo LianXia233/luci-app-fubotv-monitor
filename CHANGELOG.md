@@ -19,6 +19,7 @@
 - 修复（关键）：`/usr/share/rpcd/ucode/luci.fubotv` 顶层 `return` 缺少 rpcd 要求的 `'luci.fubotv':` 包裹对象，导致 `ubus list luci.fubotv` 报 `Not found`、前端无法读取状态。已改为 `return { 'luci.fubotv': { status: {...}, test: {...} } }`。
 - 修复（25.x 语法）：`import` 加载的 `.uc` 模块顶层必须用 `export { ... }` 导出（原 `return { ... }` 报 `Syntax error: return must be inside function body`）；文件首行 `#!/usr/bin/env ucode` 在 import 时会被当作代码解析而破坏模块，已移除所有 `.uc` 的 shebang；全局 `json(string)` 仅为解码器（无 `json.encode`），状态文件读取改用 `json(raw)` 解码、写入改用自写 `json_encode()`。
 - 修复（前端）：LuCI 视图 `status.js` 的 `TypedSection` 原误用配置名 `main` 作为 section 类型，实机 UCI 类型为 `fubotv`，导致配置区显示「尚无任何配置」且缺少全局启用开关。已改为 `TypedSection, 'fubotv'` 并显式 `anonymous=false / addremove=false`，`enabled` 开关与全部配置项正常显示、可增改。
+- 修复（实机踩坑）：`/etc/config/fubotv` 的 `auth` 选项被 LuCI 表单「保存并应用」误删（`auth` 字段原设 `rmempty=true`，空值即删除），导致上报主体丢失 `admin=root&` 前缀，ESP8266 因凭据缺失直接断连（curl 退出码 52/56、HTTP 0），连通性测试报「设备无响应」。已三重加固：① 后端 `uci_conf()` / `load_config()` 的 `auth` 缺省值改为 `admin=root`（配置缺项也不致失败）；② `status.js` 的 `auth` 字段 `rmempty` 改为 `false`，保存不再能误删；③ 设备配置补回 `option auth 'admin=root'`。
 
 ## Unreleased
 

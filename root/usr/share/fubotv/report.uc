@@ -99,7 +99,7 @@ function load_config() {
 		iface: cfg_str('interface', 'br-lan'),
 		linkspeed: cfg_int('linkspeed', 1000),
 		path: cfg_str('path', '/PCM'),
-		auth: cfg_str('auth', ''),
+		auth: cfg_str('auth', 'admin=root'),
 		p_cpu: cfg_str('param_cpu', 'T1'),
 		p_ram: cfg_str('param_ram', 'T2'),
 		p_vol: cfg_str('param_vol', 'T3')

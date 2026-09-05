@@ -44,7 +44,7 @@ function uci_conf() {
 		iface: get('interface', 'br-lan'),
 		linkspeed: int(get('linkspeed', '1000')) || 1000,
 		path: get('path', '/PCM'),
-		auth: get('auth', ''),
+		auth: get('auth', 'admin=root'),
 		p_cpu: get('param_cpu', 'T1'),
 		p_ram: get('param_ram', 'T2'),
 		p_vol: get('param_vol', 'T3')

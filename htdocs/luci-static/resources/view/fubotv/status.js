@@ -246,8 +246,8 @@ return view.extend({
 
 		o = s.option(form.Value, 'auth', _('认证串（表单首字段）'),
 			_('作为表单主体首个字段发送。原版上位机使用 admin=root，留空则不附加。凭据错误时设备会直接断开连接。'));
-		o.default = 'admin=root';
-		o.rmempty = true;
+	o.default = 'admin=root';
+	o.rmempty = false;
 
 		o = s.option(form.Value, 'param_cpu', _('CPU 参数名'),
 			_('上报 CPU 占用率的表单参数名（POST 主体字段）。'));

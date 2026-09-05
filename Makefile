@@ -1,12 +1,12 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-fubotv-monitor
-PKG_VERSION:=1.0.0
+PKG_VERSION:=1.0.1
 PKG_RELEASE:=1
 
 LUCI_TITLE:=FuBoTv monitor reporter for ESP8266 weather clock
-LUCI_DESCRIPTION:=Report router CPU, RAM and LAN utilization to an ESP8266 \
-	WiFi weather clock over HTTP, compatible with the stock Windows agent.
+LUCI_DESCRIPTION:=Report router CPU, RAM utilization and CPU temperature to an \
+	ESP8266 WiFi weather clock over HTTP, compatible with the stock Windows agent.
 LUCI_DEPENDS:= \
 	+luci-base \
 	+curl \

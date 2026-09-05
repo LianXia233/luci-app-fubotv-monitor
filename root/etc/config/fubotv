@@ -8,14 +8,8 @@ config fubotv 'main'
 	# HTTP 端口，留空或 80 时不写入 URL
 	option port '80'
 
-	# 上报间隔（秒），范围 1-3600
-	option interval '1'
-
-	# VOL 指标统计的 LAN 接口
-	option interface 'br-lan'
-
-	# 接口速率回退值（Mbps）。仅在无法从 sysfs 自动探测时生效
-	option linkspeed '1000'
+	# 上报间隔（毫秒），范围 100-3600000
+	option interval '1000'
 
 	# 上报路径
 	option path '/PCM'
@@ -27,4 +21,4 @@ config fubotv 'main'
 	# 三项指标对应的表单参数名
 	option param_cpu 'T1'
 	option param_ram 'T2'
-	option param_vol 'T3'
+	option param_temp 'T3'

@@ -8,7 +8,7 @@
 /*
  * fubotv-monitor -- LuCI 视图
  *
- * 上半部分为实时仪表盘（CPU / RAM / VOL），每 2 秒经 luci.fubotv.status 刷新；
+ * 上半部分为实时仪表盘（CPU / RAM / TEMP），每 2 秒经 luci.fubotv.status 刷新；
  * 下半部分为 UCI 配置表单，保存后由 procd 的 config 触发器自动重载守护进程。
  */
 
@@ -48,19 +48,20 @@ function level(n) {
 	return 'ftv-lv-low';
 }
 
-function fmtNum(v) {
-	return (v === null) ? '--' : v.toFixed(1);
+/* 温度分档：>=70°C 高负载警示，>=55°C 偏热，其余正常 */
+function tempLevel(t) {
+	if (t === null)
+		return 'ftv-lv-idle';
+	if (t >= 70)
+		return 'ftv-lv-high';
+	if (t >= 55)
+		return 'ftv-lv-mid';
+
+	return 'ftv-lv-low';
 }
 
-function fmtRate(bps) {
-	var n = parseFloat(bps) || 0;
-
-	if (n >= 1000000)
-		return (n / 1000000).toFixed(2) + ' Mbps';
-	if (n >= 1000)
-		return (n / 1000).toFixed(1) + ' Kbps';
-
-	return Math.round(n) + ' bps';
+function fmtNum(v, decimals) {
+	return (v === null) ? '--' : v.toFixed(decimals === undefined ? 1 : decimals);
 }
 
 function pad2(n) {
@@ -79,10 +80,14 @@ function fmtTime(ts) {
 
 /* ------------------------------------------------------------------ 卡片 */
 
-function card(key, desc, value, foot) {
-	var n = pct(value);
+function card(key, desc, value, foot, opts) {
+	var isTemp = (opts && opts.temp);
+	var n = isTemp ? parseFloat(value) : pct(value);
+	var lvl = isTemp ? tempLevel(n) : level(n);
+	var decimals = (opts && opts.decimals !== undefined) ? opts.decimals : 1;
+	var unit = (opts && opts.unit) || '%';
 
-	return E('div', { 'class': 'ftv-card ' + level(n) }, [
+	return E('div', { 'class': 'ftv-card ' + lvl }, [
 		E('div', { 'class': 'ftv-head' }, [
 			E('span', { 'class': 'ftv-key' }, key),
 			E('span', { 'class': 'ftv-desc' }, desc)
@@ -90,15 +95,17 @@ function card(key, desc, value, foot) {
 		E('div', { 'class': 'ftv-num' }, [
 			E('span', {
 				'class': 'ftv-num-v',
-				'data-ftv-value': key
-			}, fmtNum(n)),
-			E('span', { 'class': 'ftv-num-u' }, '%')
+				'data-ftv-value': key,
+				'data-ftv-temp': isTemp ? '1' : '',
+				'data-ftv-decimals': decimals
+			}, fmtNum(n, decimals)),
+			E('span', { 'class': 'ftv-num-u' }, unit)
 		]),
 		E('div', { 'class': 'ftv-bar' }, [
 			E('div', {
 				'class': 'ftv-bar-fill',
 				'data-ftv-bar': key,
-				'style': 'width:' + (n === null ? 0 : n) + '%'
+				'style': 'width:' + (n === null ? 0 : Math.min(100, Math.max(0, n))) + '%'
 			}, '')
 		]),
 		E('div', { 'class': 'ftv-foot', 'data-ftv-foot': key }, foot || [])
@@ -106,7 +113,6 @@ function card(key, desc, value, foot) {
 }
 
 function updateCard(key, value, foot) {
-	var n = pct(value);
 	var vEl = document.querySelector('[data-ftv-value="' + key + '"]');
 	var bEl = document.querySelector('[data-ftv-bar="' + key + '"]');
 	var fEl = document.querySelector('[data-ftv-foot="' + key + '"]');
@@ -114,14 +120,19 @@ function updateCard(key, value, foot) {
 	if (!vEl || !bEl)
 		return;
 
-	vEl.textContent = fmtNum(n);
-	bEl.style.width = (n === null ? 0 : n) + '%';
+	var isTemp = (vEl.getAttribute('data-ftv-temp') == '1');
+	var decimals = parseInt(vEl.getAttribute('data-ftv-decimals'), 10);
+	var n = isTemp ? parseFloat(value) : pct(value);
+	var lvl = isTemp ? tempLevel(n) : level(n);
+
+	vEl.textContent = fmtNum(n, isNaN(decimals) ? 1 : decimals);
+	bEl.style.width = (n === null ? 0 : Math.min(100, Math.max(0, n))) + '%';
 
 	var cardEl = vEl.parentNode.parentNode;
 
 	if (cardEl) {
 		cardEl.classList.remove('ftv-lv-low', 'ftv-lv-mid', 'ftv-lv-high', 'ftv-lv-idle');
-		cardEl.classList.add(level(n));
+		cardEl.classList.add(lvl);
 	}
 
 	if (fEl && foot) {
@@ -140,7 +151,7 @@ function statusBar(st) {
 
 	var items = [
 		E('span', { 'class': cls }, [ E('span', { 'class': 'ftv-dot' }), txt ]),
-		E('span', { 'class': 'ftv-meta' }, [ _('间隔'), ' ', E('b', {}, (st.interval || 1) + ' s') ]),
+		E('span', { 'class': 'ftv-meta' }, [ _('间隔'), ' ', E('b', {}, (st.interval || 100) + ' ms') ]),
 		E('span', { 'class': 'ftv-meta' }, [ _('已上报'), ' ', E('b', {}, st.count || 0), ' ', _('次') ]),
 		E('span', { 'class': 'ftv-meta' }, [ _('成功'), ' ', E('b', {}, st.ok || 0) ]),
 		E('span', { 'class': 'ftv-meta' }, [ _('失败'), ' ', E('b', {}, st.fail || 0) ]),
@@ -165,19 +176,14 @@ function applyStatus(st) {
 
 	updateCard('CPU', st.cpu);
 	updateCard('RAM', st.ram);
-	updateCard('VOL', st.vol, volFoot(st));
+	updateCard('TEMP', st.temp, tempFoot(st));
 }
 
-function volFoot(st) {
-	var parts = [];
+function tempFoot(st) {
+	if (st.temp === null || st.temp === undefined)
+		return E('span', {}, _('等待守护进程首拍上报'));
 
-	parts.push(E('span', {}, (st.iface || 'br-lan') + ' · ' + (st.linkspeed || 1000) + ' Mbps' +
-		(st.linkspeed_auto ? '' : ' *')));
-
-	if (st.rx_bps != null)
-		parts.push(E('span', {}, '↓ ' + fmtRate(st.rx_bps) + '  ↑ ' + fmtRate(st.tx_bps)));
-
-	return parts;
+	return E('span', {}, _('读自 thermal zone，四舍五入取整'));
 }
 
 /* -------------------------------------------------------------------- 视图 */
@@ -195,7 +201,7 @@ return view.extend({
 		var self = this;
 
 		var m = new form.Map('fubotv', _('FuBoTv 监控上报'),
-			_('将路由器的 CPU、内存与 LAN 接口占用率，以 HTTP POST 表单推送到 ESP8266 天气时钟显示。'));
+			_('将路由器的 CPU、内存占用率与 CPU 温度，以 HTTP POST 表单推送到 ESP8266 天气时钟显示。'));
 
 		var s = m.section(form.TypedSection, 'fubotv', _('上报设置'),
 			_('修改后点击「保存并应用」，procd 会自动重载上报服务。'));
@@ -222,20 +228,9 @@ return view.extend({
 		o.placeholder = '80';
 		o.rmempty = true;
 
-		o = s.option(form.Value, 'interval', _('上报间隔（秒）'),
-			_('范围 1-3600。时钟屏幕刷新较慢或路由器负载敏感时，建议设为 2-3 秒。'));
-		o.datatype = 'and(uinteger,min(1),max(3600))';
-		o.default = '1';
-		o.rmempty = false;
-
-		o = s.option(form.Value, 'interface', _('LAN 接口'),
-			_('VOL 指标统计该接口的收发流量，通常填写 br-lan。'));
-		o.default = 'br-lan';
-		o.rmempty = false;
-
-		o = s.option(form.Value, 'linkspeed', _('接口速率回退值（Mbps）'),
-			_('仅在无法从 sysfs 自动探测速率时生效。网桥接口通常可自动探测，无需修改。'));
-		o.datatype = 'and(uinteger,min(1))';
+		o = s.option(form.Value, 'interval', _('上报间隔（毫秒）'),
+			_('范围 100-3600000。时钟屏幕刷新较慢或路由器负载敏感时，建议设为 1000-3000。'));
+		o.datatype = 'and(uinteger,min(100),max(3600000))';
 		o.default = '1000';
 		o.rmempty = false;
 
@@ -259,8 +254,8 @@ return view.extend({
 		o.default = 'T2';
 		o.rmempty = false;
 
-		o = s.option(form.Value, 'param_vol', _('VOL 参数名'),
-			_('上报 LAN 接口带宽占用率的表单参数名（POST 主体字段）。'));
+		o = s.option(form.Value, 'param_temp', _('CPU 温度参数名'),
+			_('上报 CPU 温度（°C，四舍五入取整）的表单参数名（POST 主体字段）。'));
 		o.default = 'T3';
 		o.rmempty = false;
 
@@ -293,16 +288,16 @@ return view.extend({
 		var dash = E('div', { 'class': 'ftv-dash' }, [
 			card('CPU', _('处理器'), st.cpu, [ E('span', {}, _('全部核心汇总')) ]),
 			card('RAM', _('内存'), st.ram, [ E('span', {}, _('扣除可回收缓存')) ]),
-			card('VOL', _('LAN 占用'), st.vol, volFoot(st))
+			card('TEMP', _('CPU 温度'), st.temp, tempFoot(st), { temp: true, decimals: 0, unit: '°C' })
 		]);
 
 		var hint = E('p', { 'class': 'ftv-hint' }, [
 			_('协议格式：'),
-			E('code', {}, 'POST http://<时钟地址>/PCM  ·  表单主体: admin=root&T1=<CPU>&T2=<RAM>&T3=<VOL>'),
+			E('code', {}, 'POST http://<时钟地址>/PCM  ·  表单主体: admin=root&T1=<CPU>&T2=<RAM>&T3=<温度>'),
 			E('br'),
 			_('设备仅接受 POST（GET 返回 404），凭据错误时直接断连；成功响应正文为令牌 0637。'),
 			E('br'),
-			_('CPU 与 VOL 为差值型指标，服务启动后第二拍开始才有有效数据。')
+			_('CPU 为差值型指标，服务启动后第二拍开始才有有效数据；温度为瞬时采样，四舍五入取整后上报。')
 		]);
 
 		return m.render().then(function(node) {

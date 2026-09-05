@@ -2,13 +2,13 @@
 /*
  * fubotv-monitor -- 周期上报守护进程
  *
- * 由 procd 托管，按 UCI 配置的间隔采集 CPU / RAM / VOL，
+ * 由 procd 托管，按 UCI 配置的间隔采集 CPU / RAM / TEMP，
  * 以 HTTP POST（x-www-form-urlencoded）推送到 ESP8266 天气时钟：
  *
  *   POST http://<host>[:port]<path>
  *   Content-Type: application/x-www-form-urlencoded
  *
- *   admin=root&T1=<cpu>&T2=<ram>&T3=<vol>
+ *   admin=root&T1=<cpu>&T2=<ram>&T3=<temp>
  *
  * 实机协议（2026-09-05 实测 192.168.88.244）：设备仅接受 POST，
  * GET /PCM 返回 404；凭据 admin=root 必须是表单首字段，
@@ -24,11 +24,12 @@
 import * as uci from 'uci';
 import * as fs from 'fs';
 import * as uloop from 'uloop';
-import { cpu_usage, mem_usage, vol_usage, vol_throughput } from '/usr/share/fubotv/lib.uc';
+import { cpu_usage, mem_usage, cpu_temp } from '/usr/share/fubotv/lib.uc';
 
 const STATUS_FILE = '/var/run/fubotv.status';
-const MIN_INTERVAL = 1;
-const MAX_INTERVAL = 3600;
+/* 上报间隔以毫秒配置（v1.0.1 起由秒改为毫秒），范围 100-3600000 */
+const MIN_INTERVAL = 100;
+const MAX_INTERVAL = 3600000;
 const HTTP_TIMEOUT = 3000;
 
 let cfg = null;
@@ -96,13 +97,11 @@ function load_config() {
 		host: cfg_str('host', ''),
 		port: cfg_str('port', ''),
 		interval: cfg_int('interval', MIN_INTERVAL),
-		iface: cfg_str('interface', 'br-lan'),
-		linkspeed: cfg_int('linkspeed', 1000),
 		path: cfg_str('path', '/PCM'),
 		auth: cfg_str('auth', 'admin=root'),
 		p_cpu: cfg_str('param_cpu', 'T1'),
 		p_ram: cfg_str('param_ram', 'T2'),
-		p_vol: cfg_str('param_vol', 'T3')
+		p_temp: cfg_str('param_temp', 'T3')
 	};
 }
 
@@ -134,7 +133,7 @@ function build_url(c) {
  * 表单字段顺序与原版 Windows 上位机一致：
  * 凭据 admin 首位，随后 T1/T2/T3，无前导 &。
  */
-function build_body(c, cpu, ram, vol) {
+function build_body(c, cpu, ram, temp) {
 	let out = '';
 
 	if (c.auth != '')
@@ -142,7 +141,7 @@ function build_body(c, cpu, ram, vol) {
 
 	out += (out != '' ? '&' : '') + c.p_cpu + '=' + int(cpu + 0.5);
 	out += '&' + c.p_ram + '=' + int(ram + 0.5);
-	out += '&' + c.p_vol + '=' + int(vol + 0.5);
+	out += '&' + c.p_temp + '=' + int(temp + 0.5);
 
 	return out;
 }
@@ -196,7 +195,7 @@ function send(url, body) {
 
 /* ----------------------------------------------------------------- 状态文件 */
 
-function write_status(cpu, ram, vol, result) {
+function write_status(cpu, ram, temp, result) {
 	stats.count++;
 
 	if (result.ok) {
@@ -211,14 +210,10 @@ function write_status(cpu, ram, vol, result) {
 
 	stats.last = time();
 
-	let rate = vol_throughput();
-
 	fs.writefile(STATUS_FILE, json_encode({
 		cpu: cpu,
 		ram: ram,
-		vol: vol,
-		rx_bps: rate.rx,
-		tx_bps: rate.tx,
+		temp: temp,
 		count: stats.count,
 		ok: stats.ok,
 		fail: stats.fail,
@@ -236,30 +231,30 @@ function write_status(cpu, ram, vol, result) {
 
 function tick() {
 	let c = load_config();
-	let ms = c.interval * 1000;
+	let ms = c.interval;
 
-	if (ms < MIN_INTERVAL * 1000)
-		ms = MIN_INTERVAL * 1000;
-	if (ms > MAX_INTERVAL * 1000)
-		ms = MAX_INTERVAL * 1000;
+	if (ms < MIN_INTERVAL)
+		ms = MIN_INTERVAL;
+	if (ms > MAX_INTERVAL)
+		ms = MAX_INTERVAL;
 
 	let cpu = cpu_usage();
 	let ram = mem_usage();
-	let vol = vol_usage(c.iface, c.linkspeed);
+	let temp = cpu_temp();
 
-	/* 第一拍仅为 CPU / VOL 建立差值基准，数据无意义，跳过上报 */
+	/* 第一拍仅为 CPU 建立差值基准，数据无意义，跳过上报 */
 	if (warmed && c.enabled) {
 		if (c.host == '') {
 			warn('fubotv: host not configured, skipping\n');
 		}
 		else {
 			let url = build_url(c);
-			let body = build_body(c, cpu, ram, vol);
+			let body = build_body(c, cpu, ram, temp);
 			let result = send(url, body);
 
 			result.url = url;
 			result.body = body;
-			write_status(cpu, ram, vol, result);
+			write_status(cpu, ram, temp, result);
 
 			if (!result.ok)
 				warn('fubotv: report failed (' + result.error + '): POST ' + url + '\n');
@@ -280,6 +275,6 @@ cfg.load('fubotv');
 if (cfg.get('fubotv', 'main', 'enabled') != '1')
 	warn('fubotv: service started but fubotv.main.enabled is not 1\n');
 
-/* 首拍 200ms 后仅为 CPU / VOL 建立差值基准，随后在 tick 内按配置间隔重新装填 */
+/* 首拍 200ms 后仅为 CPU 建立差值基准，随后在 tick 内按配置间隔重新装填 */
 timer = uloop.interval(200, tick);
 uloop.run();

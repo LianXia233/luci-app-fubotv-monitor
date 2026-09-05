@@ -18,7 +18,7 @@
 import * as fs from 'fs';
 import * as uci from 'uci';
 import * as ubus from 'ubus';
-import { cpu_usage, mem_usage, vol_usage, iface_speed_mbps, shquote } from '/usr/share/fubotv/lib.uc';
+import { cpu_usage, mem_usage, cpu_temp, shquote } from '/usr/share/fubotv/lib.uc';
 
 const STATUS_FILE = '/var/run/fubotv.status';
 const HTTP_TIMEOUT = 3000;
@@ -40,14 +40,12 @@ function uci_conf() {
 		enabled: get('enabled', '0') == '1',
 		host: get('host', ''),
 		port: get('port', ''),
-		interval: int(get('interval', '1')) || 1,
-		iface: get('interface', 'br-lan'),
-		linkspeed: int(get('linkspeed', '1000')) || 1000,
+		interval: int(get('interval', '100')) || 100,
 		path: get('path', '/PCM'),
 		auth: get('auth', 'admin=root'),
 		p_cpu: get('param_cpu', 'T1'),
 		p_ram: get('param_ram', 'T2'),
-		p_vol: get('param_vol', 'T3')
+		p_temp: get('param_temp', 'T3')
 	};
 }
 
@@ -70,7 +68,7 @@ function build_url(c) {
 	return url + ((path != '') ? path : '/PCM');
 }
 
-function build_body(c, cpu, ram, vol) {
+function build_body(c, cpu, ram, temp) {
 	let out = '';
 
 	if (c.auth != '')
@@ -78,7 +76,7 @@ function build_body(c, cpu, ram, vol) {
 
 	out += (out != '' ? '&' : '') + c.p_cpu + '=' + int(cpu + 0.5);
 	out += '&' + c.p_ram + '=' + int(ram + 0.5);
-	out += '&' + c.p_vol + '=' + int(vol + 0.5);
+	out += '&' + c.p_temp + '=' + int(temp + 0.5);
 
 	return out;
 }
@@ -119,7 +117,6 @@ return {
 			}
 
 			let running = service_running();
-			let speed = iface_speed_mbps(c.iface);
 
 			return {
 				running: running,
@@ -127,15 +124,10 @@ return {
 				enabled: c.enabled,
 				host: c.host,
 				interval: c.interval,
-				iface: c.iface,
-				linkspeed: (speed != null) ? speed : c.linkspeed,
-				linkspeed_auto: (speed != null),
 				path: c.path,
 				cpu: (st != null) ? st.cpu : null,
 				ram: (st != null) ? st.ram : mem_usage(),
-				vol: (st != null) ? st.vol : null,
-				rx_bps: (st != null) ? st.rx_bps : null,
-				tx_bps: (st != null) ? st.tx_bps : null,
+				temp: (st != null) ? st.temp : null,
 				count: (st != null) ? st.count : 0,
 				ok: (st != null) ? st.ok : 0,
 				fail: (st != null) ? st.fail : 0,
@@ -156,16 +148,15 @@ return {
 			if (c.host == '')
 				return { ok: false, code: 0, url: '', body: '', error: '尚未配置时钟 IP 地址' };
 
-			/* CPU 与 VOL 是差值型指标，此处做一次 1 秒窗口采样 */
+			/* CPU 是差值型指标，此处做一次 1 秒窗口采样；温度为瞬时读数 */
 			cpu_usage();
-			vol_usage(c.iface, c.linkspeed);
 			sleep(1);
 
 			let cpu = cpu_usage();
 			let ram = mem_usage();
-			let vol = vol_usage(c.iface, c.linkspeed);
+			let temp = cpu_temp();
 			let url = build_url(c);
-			let body = build_body(c, cpu, ram, vol);
+			let body = build_body(c, cpu, ram, temp);
 			let tmp = '/tmp/.fubotv_test_' + time();
 
 			/*
@@ -213,7 +204,7 @@ return {
 				resp: resp,
 				cpu: cpu,
 				ram: ram,
-				vol: vol,
+				temp: temp,
 				error: error
 			};
 		}

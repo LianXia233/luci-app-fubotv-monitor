@@ -3,12 +3,13 @@
  * fubotv-monitor -- 系统指标采集库
  *
  * 提供三项指标，与原版 Windows 上位机的 T1/T2/T3 一一对应：
- *   CPU -- 处理器总占用率(%)
- *   RAM -- 内存占用率(%)
- *   VOL -- LAN 接口带宽占用率(%)（全双工链路，取收发均值占单向带宽的百分比）
+ *   CPU  -- 处理器总占用率(%)
+ *   RAM  -- 内存占用率(%)
+ *   TEMP -- CPU 核心温度(°C，四舍五入取整)
  *
- * CPU 与 VOL 均为差值型指标，需要在进程内保留上一次快照，
+ * CPU 为差值型指标，需要在进程内保留上一次快照，
  * 因此调用方必须常驻（由 procd 托管的守护进程），不能每次重新 exec。
+ * TEMP 为瞬时采样（读 thermal zone），无需快照。
  *
  * 适配 OpenWrt 25.x / ImmortalWrt SNAPSHOT 的 ucode 2026.07+ API：
  *   - fs 模块导出 readfile/writefile/open/unlink/lsdir（无 close/read/readdir）
@@ -139,126 +140,36 @@ function mem_usage() {
 	return round1((total - avail) * 100 / total);
 }
 
-/* ------------------------------------------------------------ 接口收发字节 */
-
-function iface_bytes(ifname) {
-	let data = read_text('/proc/net/dev');
-
-	if (!data)
-		return null;
-
-	for (let line in lines(data)) {
-		let pos = index(line, ':');
-
-		if (pos < 0)
-			continue;
-
-		if (trim(substr(line, 0, pos)) != ifname)
-			continue;
-
-		let f = fields(substr(line, pos + 1));
-
-		if (length(f) < 9)
-			return null;
-
-		return { rx: int(f[0]) || 0, tx: int(f[8]) || 0 };
-	}
-
-	return null;
-}
+/* ---------------------------------------------------------- CPU 温度(°C) */
 
 /*
- * 探测接口速率(Mbps)。
- * 1) 直接读 /sys/class/net/<if>/speed
- * 2) 若是网桥(br-lan)，遍历 brif/ 成员口取最大速率
- * 3) 都拿不到则返回 null，由调用方回退到 UCI 里的 linkspeed
+ * 读 /sys/class/thermal/ 下各 thermal_zone 目录的 temp 文件，
+ * 内核以毫摄氏度给出。遍历各 zone，取第一个可读且非零的温度，
+ * 除以 1000 得 °C，再四舍五入取整（int(m / 1000 + 0.5)）。
+ * 路由器(如 mediatek/filogic)通常 thermal_zone0 即 CPU 封装温度。
+ * 全部 zone 缺失/为零时回退 0（设备无可用传感器）。
  */
-function iface_speed_mbps(ifname) {
-	let s = read_text('/sys/class/net/' + ifname + '/speed');
+function cpu_temp() {
+	let zones = fs.lsdir('/sys/class/thermal');
 
-	if (s != null) {
-		let v = int(trim(s)) || 0;
-
-		if (v > 0 && v < 1000000)
-			return v;
-	}
-
-	let members = fs.lsdir('/sys/class/net/' + ifname + '/brif');
-
-	if (members) {
-		let best = 0;
-
-		for (let m in members) {
-			let ms = read_text('/sys/class/net/' + m + '/speed');
-
-			if (ms == null)
+	if (zones) {
+		for (let z in zones) {
+			if (substr(z, 0, 12) != 'thermal_zone')
 				continue;
 
-			let v = int(trim(ms)) || 0;
+			let raw = read_text('/sys/class/thermal/' + z + '/temp');
 
-			if (v > best && v < 1000000)
-				best = v;
+			if (raw == null)
+				continue;
+
+			let m = int(trim(raw)) || 0;
+
+			if (m > 0)
+				return int(m / 1000 + 0.5);
 		}
-
-		if (best > 0)
-			return best;
 	}
 
-	return null;
-}
-
-/* ------------------------------------------------------- LAN 带宽占用率(VOL) */
-
-let vol_prev = null;
-let vol_rate = { rx: 0, tx: 0 };
-
-function vol_usage(ifname, fallback_mbps) {
-	let cur = iface_bytes(ifname);
-
-	if (!cur)
-		return 0;
-
-	let now = time();
-
-	/* 首次调用或接口变更时只建立基准，本拍返回 0 */
-	if (vol_prev == null || vol_prev.iface != ifname) {
-		vol_prev = { iface: ifname, rx: cur.rx, tx: cur.tx, t: now };
-		vol_rate = { rx: 0, tx: 0 };
-		return 0;
-	}
-
-	let d_rx = cur.rx - vol_prev.rx;
-	let d_tx = cur.tx - vol_prev.tx;
-	let dt   = now - vol_prev.t;
-
-	vol_prev = { iface: ifname, rx: cur.rx, tx: cur.tx, t: now };
-
-	if (dt <= 0)
-		return 0;
-
-	/* 接口被删除重建或计数器溢出时会出现回绕，丢弃该拍 */
-	if (d_rx < 0)
-		d_rx = 0;
-	if (d_tx < 0)
-		d_tx = 0;
-
-	let mbps = iface_speed_mbps(ifname);
-	let speed = (mbps != null) ? mbps : (int(fallback_mbps) || 0);
-
-	if (speed <= 0)
-		return 0;
-
-	let rx_bps = d_rx * 8 / dt;
-	let tx_bps = d_tx * 8 / dt;
-
-	vol_rate = { rx: int(rx_bps), tx: int(tx_bps) };
-
-	/* 全双工：上下行各占一条通道，取均值对单向带宽求百分比 */
-	return round1((rx_bps + tx_bps) / 2 * 100 / (speed * 1000000));
-}
-
-function vol_throughput_get() {
-	return vol_rate;
+	return 0;
 }
 
 /* ------------------------------------------------------------------ 导出 */
@@ -269,8 +180,5 @@ export {
 	shquote,
 	cpu_usage,
 	mem_usage,
-	iface_bytes,
-	iface_speed_mbps,
-	vol_usage,
-	vol_throughput_get as vol_throughput
+	cpu_temp
 };

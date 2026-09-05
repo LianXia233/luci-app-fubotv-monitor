@@ -16,7 +16,7 @@ env:
   SDK_TARGET: "x86"
   SDK_SUBTARGET: "64"
   PKG_NAME: "luci-app-fubotv-monitor"
-  RELEASE_TAG: "v1.0.0"
+  RELEASE_TAG: "v1.0.1"
 
 jobs:
   # 1) 检出代码并更新 CHANGELOG.md 记录 v1.0.0 变更，提交后推回仓库。
@@ -29,7 +29,7 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Ensure v1.0.0 entry in CHANGELOG.md
+      - name: Ensure v1.0.1 entry in CHANGELOG.md
         run: |
           set -euo pipefail
           DATE=$(date +%Y-%m-%d)
@@ -40,9 +40,9 @@ jobs:
             {
               echo "## ${{ env.RELEASE_TAG }} - ${DATE}"
               echo ""
-              echo "- 初始版本：FuBoTv 监控 Luci 插件"
-              echo "- 上报 CPU / RAM / LAN 接口带宽占用率至 ESP8266 天气时钟"
-              echo "- 上报协议兼容原 Windows 上位机：GET /PCM?T1=<cpu>&T2=<ram>&T3=<vol>"
+              echo "- 第三项指标由 LAN 带宽占用率(VOL) 改为 CPU 温度(°C，四舍五入取整)"
+              echo "- 上报间隔单位由秒改为毫秒(interval, 100-3600000)"
+              echo "- 上报协议：POST /PCM 表单主体 admin=root&T1=<cpu>&T2=<ram>&T3=<temp>"
               echo ""
               cat CHANGELOG.md
             } > "$TMP"
@@ -131,7 +131,7 @@ jobs:
           path: output/*.apk
           if-no-files-found: error
 
-  # 3) 编译成功后，把 apk 上传到仓库 Releases（标签 v1.0.0）。
+  # 3) 编译成功后，把 apk 上传到仓库 Releases（标签 v1.0.1）。
   release:
     needs: build
     runs-on: ubuntu-latest
@@ -148,10 +148,12 @@ jobs:
           tag_name: ${{ env.RELEASE_TAG }}
           name: FuBoTv Monitor ${{ env.RELEASE_TAG }}
           body: |
-            FuBoTv Monitor Luci 插件初始发布。
+            FuBoTv Monitor Luci 插件 v1.0.1。
 
-            - 向 ESP8266 天气时钟上报路由器 CPU / RAM / LAN 带宽占用率
-            - 协议兼容原 Windows 上位机：GET /PCM?T1=<cpu>&T2=<ram>&T3=<vol>
+            - 向 ESP8266 天气时钟上报路由器 CPU / RAM 占用率与 CPU 温度（°C，四舍五入取整）
+            - 协议兼容原 Windows 上位机：POST /PCM 表单主体 admin=root&T1=<cpu>&T2=<ram>&T3=<temp>
+            - 第三项指标自本版起由 LAN 带宽占用率(VOL) 改为 CPU 温度(TEMP)
+            - 上报间隔单位由秒改为毫秒（interval，100-3600000，默认 1000）
             - 上报目标 IP / 端口 / 路径 / 鉴权均可经 UCI 自定义
             - procd 常驻守护进程 + rpcd/ubus 后端 + LuCI 实时仪表盘
             - 包架构为 all，单 SDK 编译产物可在所有平台安装

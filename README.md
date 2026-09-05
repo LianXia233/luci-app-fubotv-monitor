@@ -1,6 +1,6 @@
 # luci-app-fubotv-monitor
 
-在 ImmortalWrt / OpenWrt 路由器上，把 CPU、内存与 LAN 接口占用率周期上报给 ESP8266「WiFi 天气时钟 / B站小电视」，由时钟屏幕直接显示。
+在 ImmortalWrt / OpenWrt 路由器上，把 CPU、内存占用率与 CPU 温度周期上报给 ESP8266「WiFi 天气时钟 / B站小电视」，由时钟屏幕直接显示。
 
 协议与原版 Windows 上位机 `FuBoTv电脑性能监控.exe` 完全兼容，可直接替换掉常开的那台 Windows 机器。
 
@@ -17,12 +17,11 @@ procd 守护进程 (ucode + uloop)
     |
     |-- /proc/stat      -> CPU 占用率   (T1)
     |-- /proc/meminfo   -> 内存占用率   (T2)
-    |-- /proc/net/dev   -> LAN 带宽占用 (T3, VOL)
-    |     速率基准优先读 /sys/class/net/<if>/speed，
-    |     网桥则遍历 brif/ 成员口取最大值，取不到才回退到 UCI 的 linkspeed
+    |-- /sys/class/thermal/thermal_zone*/temp
+    |                   -> CPU 温度     (T3, TEMP，毫摄氏度/1000 四舍五入取整)
     |
     +-- HTTP POST --> http://<时钟地址>/PCM
-    |                 表单主体: admin=root&T1=<cpu>&T2=<ram>&T3=<vol>
+    |                 表单主体: admin=root&T1=<cpu>&T2=<ram>&T3=<temp>
     |                 每秒/每 N 秒一次，最新结果写入 /var/run/fubotv.status
 ```
 
@@ -45,7 +44,7 @@ LuCI 界面通过 `luci.fubotv.status` 读取状态文件，每 2 秒刷新一�
 POST http://<host>[:port]<path> HTTP/1.1
 Content-Type: application/x-www-form-urlencoded
 
-admin=root&T1=<cpu>&T2=<ram>&T3=<vol>
+admin=root&T1=<cpu>&T2=<ram>&T3=<temp>
 ```
 
 默认即原版上位机的格式：
@@ -63,9 +62,9 @@ POST http://192.168.88.244/PCM
 |---|---|---|---|
 | CPU | `T1` | `(Δtotal - Δidle) / Δtotal` | 读 `/proc/stat` 汇总行，idle 计入 `idle + iowait`，与 `top` 口径一致 |
 | RAM | `T2` | `(MemTotal - MemAvailable) / MemTotal` | 用 `MemAvailable` 而非 `MemFree`，已扣除可回收的 buff/cache，与 `free` 的 available 列一致 |
-| VOL | `T3` | `(rx_bps + tx_bps) / 2 / link_speed` | LAN 接口带宽占用百分比。全双工链路上下行各占一条通道，故取收发均值对单向带宽求百分比 |
+| TEMP | `T3` | `round(thermal_zone_temp / 1000)` | CPU 温度（°C，四舍五入取整）。遍历 `/sys/class/thermal/thermal_zone*`，取第一个非零读数 |
 
-**需要注意**：CPU 与 VOL 是差值型指标，必须在进程内保留上一次快照。这意味着采集逻辑只能常驻运行，不能每次上报重新 exec 一个进程——这也是本插件用守护进程而非 cron 的原因。服务启动后第一拍只建立基准，**第二拍起才有有效数据**。
+**需要注意**：CPU 是差值型指标，必须在进程内保留上一次快照。这意味着采集逻辑只能常驻运行，不能每次上报重新 exec 一个进程——这也是本插件用守护进程而非 cron 的原因。服务启动后第一拍只建立基准，**第二拍起才有有效数据**。温度为瞬时采样，首拍即有效。
 
 ---
 
@@ -127,22 +126,22 @@ rm -rf /tmp/luci-indexcache /tmp/luci-modulecache
 | `enabled` | bool | `0` | 是否启用周期上报 |
 | `host` | string | `192.168.88.244` | 时钟的 IP 或主机名，支持 IPv6（自动加方括号） |
 | `port` | string | `80` | HTTP 端口，留空或 `80` 时 URL 中省略 |
-| `interval` | int | `1` | 上报间隔（秒），范围 1-3600 |
-| `interface` | string | `br-lan` | VOL 统计的 LAN 接口 |
-| `linkspeed` | int | `1000` | 接口速率回退值（Mbps），仅在自动探测失败时生效 |
+| `interval` | int | `1000` | 上报间隔（毫秒），范围 100-3600000。v1.0.1 起由秒改为毫秒，旧配置的秒值（如 `2`）会被钳制到最小 100ms，建议升级后手动改为毫秒值 |
 | `path` | string | `/PCM` | 上报路径 |
 | `auth` | string | `admin=root` | POST 表单主体的首个字段（认证串），留空则不附加 |
 | `param_cpu` | string | `T1` | CPU 参数名 |
 | `param_ram` | string | `T2` | 内存参数名 |
-| `param_vol` | string | `T3` | LAN 占用参数名 |
+| `param_temp` | string | `T3` | CPU 温度参数名 |
+
+> v1.0.1 起第三项指标由 VOL(LAN 占用) 改为 CPU 温度，原 `interface`/`linkspeed`/`param_vol`
+> 配置项已废弃，可从 UCI 中删除（`uci delete fubotv.main.param_vol` 等）。
 
 命令行配置示例：
 
 ```bash
 uci set fubotv.main.enabled='1'
 uci set fubotv.main.host='192.168.88.244'
-uci set fubotv.main.interval='2'
-uci set fubotv.main.interface='br-lan'
+uci set fubotv.main.interval='1000'
 uci commit fubotv
 /etc/init.d/fubotv restart
 ```
@@ -151,7 +150,7 @@ uci commit fubotv
 
 ### 上报间隔怎么选
 
-原版上位机固定 1 秒。路由器上 1 秒也完全可以承受（单次采集只读三个 /proc 文件，开销在毫秒级），但如果时钟端刷新跟不上或你介意日志量，2-3 秒更稳妥。
+原版上位机固定 1 秒。路由器上毫秒级间隔也完全可以承受（单次采集只读三个 /proc 文件与一个 thermal zone，开销在毫秒级），建议 1000-3000ms；如追求实时感可降到 500ms 以下，但需注意时钟端屏幕刷新是否跟得上。
 
 ---
 
@@ -203,11 +202,8 @@ ucode /usr/share/fubotv/report.uc
 **卡片一直显示 `--`**
 守护进程刚启动，处于第一拍基准期，等一个间隔再看。若持续为 `--`，检查 `/var/run/fubotv.status` 是否存在。
 
-**VOL 恒为 0**
-接口名填错（用 `ip link` 确认），或该接口确实没有流量。千兆口下 100 Mbps 流量对应 VOL = 10%，小流量场景数值本来就很小，属正常。
-
-**VOL 数值明显偏大**
-速率基准探测失败，回退到了 `linkspeed`。界面上接口速率后面带 `*` 号即表示未自动探测到。此时手动把 `linkspeed` 改成实际速率即可。
+**温度恒为 0**
+设备没有可读的 thermal zone（`ls /sys/class/thermal/` 为空或全部 temp 为 0），此时按 0 上报，属预期降级行为。可用 `cat /sys/class/thermal/thermal_zone*/temp` 确认。
 
 **上报全部失败**
 - 用 GET 而非 POST 验证（设备对 GET /PCM 返回 404，属预期行为）
@@ -253,7 +249,7 @@ luci-app-fubotv-monitor/
 
 | 方法 | 说明 |
 |---|---|
-| `status()` | 返回运行态、三项指标、上报统计、自动探测到的接口速率 |
+| `status()` | 返回运行态、三项指标（CPU/RAM/温度）、上报统计 |
 | `test()` | 采样 1 秒后发送单条 POST 上报，返回成功与否、HTTP 状态码、设备响应、完整 URL 与表单主体 |
 
 ---
